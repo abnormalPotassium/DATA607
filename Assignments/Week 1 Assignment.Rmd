@@ -1,0 +1,59 @@
+---
+title: "Week 1 Assignment"
+author: "Taha Ahmad"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library("tidyverse")
+```
+
+### Introduction
+
+As a previous and current college-goer, it would make sense if I had exposure to college fight songs. However, I can not remember a single word of the fight song of a college that I have gone to. This is why the data (https://projects.fivethirtyeight.com/college-fight-song-lyrics/) I'm going to go over is a collection of various parameters regarding the college fight songs of 65 schools which were part of the major sports conferences apparently called the "Power Five".
+
+####Loading the Data
+
+Here we load the data from the csv within GitHub into a dataframe for further processing later. 
+
+We also take a glimpse at the data to see if anything needs to be further modified regarding the headers or the data itself. 
+
+In this case the headers to me in certain instances of categorical variables seem to be ambiguous. The values themselves seem fine however.
+
+```{r Loading the Data}
+
+fightframe <- read.csv("https://raw.githubusercontent.com/fivethirtyeight/data/master/fight-songs/fight-songs.csv", header= TRUE)
+glimpse (fightframe)
+
+```
+####Processing the Data
+
+Here we change the names of some ambiguous columns in order to make the data itself more useful. There are multiple columns such as "victory" that are indicators of words that are directly in the lyrics of the song itself. These I want to prepend with "contains_", so "victory" becomes "contains_victory". There are also columns that indicate if something is mentioned in the song such as "men", but are not directly in the lyrics. These I want to prepend with "mentions_", so "men" becomes "mentions_men".
+
+```{r Processing the Data}
+
+fightframe <- rename(fightframe,c("won_contest" = "contest","contains_fight"  = "fight", "contains_victory" = "victory", "contains_win_won" = "win_won","contains_victory_win_won" = "victory_win_won", "contains_rah" = "rah","contains_nonsense" = "nonsense","mentions_colors" = "colors","mentions_men" = "men","mentions_opponents" = "opponents","contains_spelling" = "spelling"))
+colnames(fightframe)
+
+```
+####Subsetting the Data
+
+Now that the dataframe is loaded into R and has better names for the column, we can begin to utilize this data via subsetting. 
+
+In this instance, I want to attempt to subset the data in a way that will answer the question "Which college fight song is the manliest college fight song?" First we would need to define a manly song within our parameters. In this case, we'll say a manly song is one that at the very least: contains "fight", contains "rah", and mentions men. As these are all very manly things for a song to do. Now to compare manliness we could use the number of times the song says "fight" to measure manliness, as more "fight" means it is more manly. A top ten list would also make for easier comparing.
+
+```{r Subsetting the Data}
+
+fightsubset <- subset(fightframe,"contains_fight" = "Yes", "contains_rah" = "Yes", "mentions_men" = "Yes", select = c("school","song_name","number_fights"))
+attach(fightsubset)
+fightsubsetordered <- head(fightsubset[order(-number_fights),],10)
+detach(fightsubset)
+fightsubsetordered
+```
+We can see that Texas Fight wins the manliest match by an overwhelming margin of 7 fights here.
+
+### Conclusions
+
+The data that was collected by FiveThirtyEight is quite a fun way to collect data. I believe this dataset could be improved by having data collected from more colleges. As of now it only exists for those that actually are within the Power Five sports conferences. However, international and even just more colleges in the United States could definitely spruce the data up.
