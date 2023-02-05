@@ -1,0 +1,131 @@
+---
+title: "Week 2 Assignment"
+author: "Taha Ahmad"
+date: '`r Sys.Date()`'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+```{r package loading, echo=FALSE}
+library(DBI)
+library(dbplyr)
+library(tidyverse)
+library(RMariaDB)
+library(keyring)
+```
+
+
+### Introduction
+
+Almost every week I host a movie night with eight friends. Each week one of us has to pick a movie to show to everyone else. Then the next week it becomes the next person until it has rotated through everyone and resets.
+
+Thanks to this tradition, I actually have the perfect setup for taking a survey on movie ratings. I picked the movies from the last rotation that happened, and asked everyone to rate the movies on a scale of 1 to 5. Not everyone is available to watch each movie, so I had them put in a 0 for those movies. When considering the design of the database table, I stored the survey information in a way that would allow for new entries to be added on a row by row basis when new movies were watched rather than taking the approach of putting every movie rating as a column which would be hard to expand on.
+
+Right now, I have this survey information stored in a publically accessible .csv on my google drive at https://drive.google.com/file/d/1obqaVCZta0sNTlIoNmwej6IT4imlqDDO/view?usp=sharing. The approach I aim to take for this assignment is to load the csv file into a dataframe within R first, create a database within MySQL Server through R, load the dataframe into the database as a table, and finally directly load the table from SQL into a dataframe within R again.
+
+#### Step 1
+
+I initially load the survey into a dataframe to prepare for creating the table within SQL. I included columns like the response_id to make something that could be used as a primary_key, imdb_entry in case I would like to call some more information about the movie down the line via the imdb api, and movie_picked_by to see if someone might have had better movie picks than the others.
+
+```{r load initial survey results}
+survey_raw <- read_csv("https://docs.google.com/uc?id=1obqaVCZta0sNTlIoNmwej6IT4imlqDDO&export=download", show_col_types = FALSE)
+glimpse(survey_raw)
+```
+
+#### Step 2
+
+The first step to setting up our MySQL database is to connect to it. Here we utilize the RMariaDB package to connect to a local install of MySQL server.
+
+```{r connect to MySQL Server}
+connection <- dbConnect(
+  drv = MariaDB(),
+  user = "dabmin",
+  database = NULL,
+  password = key_get("dabmin"),
+  host = "localhost",
+  port = 3306
+)
+```
+
+#### Step 3
+
+As this is a fresh MySQL server instance and I want this to be as reproduce able as possible, we create a new database in MySQL from within R to store our table. This table will hold the information of our survey results. We then store the data collected through the survey in the table.
+
+```{r Setting up our MySQL Server Environment, echo=FALSE}
+
+query1 <- {'
+  CREATE DATABASE Survey;
+'}
+
+query2 <- {'
+  USE Survey;
+'}
+
+query3 <- {'
+  CREATE TABLE survey ( 
+    response_id int, 
+    respondent_alias varchar(100), 
+    movie_title varchar(100), 
+    movie_year year, 
+    imdb_entry varchar(20), 
+    respondent_rating int, 
+    movie_picked_by varchar(100));
+'}
+
+query_combination = c(query1, query2, query3)
+
+for (query in query_combination) {
+  dbExecute(connection, query)
+  Sys.sleep(0.5)
+}
+
+dbAppendTable(connection, "survey", survey_raw)
+```
+#### Step 4
+
+Now that we have the MySQL database and table set up in the way that we want, we'll be able to extract the table from MySQL into an r data frame. As we can see from the glimpse(), this data frame is almost identical to the raw data frame that we loaded in which means the loading was a success.One difference is that the formats that were previously dbl type are now int type. Which is actually better for us as all the numbers used are integers and they take up less memory.
+
+```{r Extracting the Data Within MySQL to R}
+
+query4 <- {'
+  SELECT * FROM survey;
+'}
+
+survey_sql <- dbGetQuery(connection, query4)
+glimpse(survey_sql)
+dbDisconnect(connection)
+```
+#### Step 5
+
+Although, most of the data is in a good state, one thing that I did want to do was deal with the data of people who did not end up watching the movie. Since R has the built in logical value of NA to deal with undefined values, I will transform the 0s to NA.
+
+```{r Data Transformation}
+
+survey_sql$respondent_rating[survey_sql$respondent_rating == 0] <- NA
+glimpse(survey_sql)
+
+```
+#### Step 6
+
+Now that we have the data loaded and transformed, we can try a basic visualization of seeing which movies were rated the highest within the whole dataset. As shown below, "What Happened to Monday" was rated highest while "Bullet Train" was rated the lowest.
+
+```{r Data Visualization}
+
+survey_sql |>
+  group_by(movie_title) |>
+  summarize(
+    mean_score = mean(respondent_rating, na.rm = TRUE)
+  ) |>
+  ggplot(aes(x=reorder(movie_title, -mean_score), y = mean_score))+
+  geom_col(aes(fill = reorder(movie_title, -mean_score)))+
+  labs(fill = "Movie Title", title = "Movies Watched by Mean Rating", x = NULL, y = "Mean Rating")+
+  theme(axis.text.x = element_blank(),axis.ticks.x = element_blank())
+```
+
+### Conclusions
+
+Extracting data from within databases like SQL to programming languages such as R is very important in the field of data science, web development, application development, and more. Once a connection is made, it is actually fairly simple to manipulate and extract the data from within the database itself as you are just sending queries through the language. Then once the data has been extracted you are able to make any changes that you would like once more through R packages such as ggplot. 
+
+For thoughts on extending this project, I would like to attempt to make a google form that gets fed into a Google Sheets document which then is periodically called by a script to have any new entries appended to a database. An automated dataflow like that would make working with data that is continuous changing much easier as you do not have to manually make the updates to the database. As for analyzing this data further, over a long enough period of time I would like to see if there was a possible trend in who chose the movies that got rated the highest.
