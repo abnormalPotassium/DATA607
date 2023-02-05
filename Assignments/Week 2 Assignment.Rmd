@@ -8,7 +8,7 @@ output: html_document
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
-```{r package loading, results=FALSE}
+```{r package loading, message=FALSE}
 library(DBI)
 library(dbplyr)
 library(tidyverse)
@@ -39,6 +39,7 @@ glimpse(survey_raw)
 The first step to setting up our MySQL database is to connect to it. Here we utilize the RMariaDB package to connect to a local install of MySQL server.
 
 ```{r connect to MySQL Server}
+
 connection <- dbConnect(
   drv = MariaDB(),
   user = "dabmin",
@@ -94,8 +95,8 @@ query4 <- {'
 '}
 
 survey_sql <- dbGetQuery(connection, query4)
-glimpse(survey_sql)
 dbDisconnect(connection)
+glimpse(survey_sql)
 ```
 #### Step 5
 
