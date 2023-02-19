@@ -1,0 +1,119 @@
+---
+title: "Week 4 Assignment"
+author: "Taha Ahmad"
+date: '`r Sys.Date()`'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+```{r package loading, message=FALSE}
+library(tidyverse)
+```
+
+
+### Introduction
+
+Project 1 is structured around scraping data from an unfriendly text table about chess statistics to get it into R. Once the data has been wrangled, the next focus is transferring information that exists one multiple other rows to another single row, for every row. Our ultimate goal is to end up with a CSV that includes the data formatted into the columns: Player’s Name, Player’s State, Total Number of Points, Player’s Pre-Rating, and Average Pre Chess Rating of Opponents.
+
+#### Loading The Data
+
+To begin with, we need to load the data into R in whatever format we can get to further work on processing it. My initial thought was loading in the text file with readr's read_delim function. With each row being delimited by the blocks made up of "-", and each column being delimited by  individual "|". Unfortunately, changing the row delimiter is not possible. So I needed to create a grouping id every second row and group every two rows together using reframe. This leaves us with a pretty good starting point for processing the individual columns.
+
+```{r loading1}
+tournament_info_rd <- read_delim("https://raw.githubusercontent.com/alu-potato/DATA607/main/Assignments/Week%204%20Project/tournamentinfo.txt", 
+                                        delim = "|", escape_double = FALSE, comment = "--", 
+                                        trim_ws = TRUE, skip = 1, col_names = FALSE, show_col_types = FALSE)
+head(tournament_info_rd,10)
+tournament_info_rd2 <- tournament_info_rd %>%
+  mutate(grouping_id = rep(1:(n()/2),each = 2)) %>%
+  group_by(grouping_id) %>%
+  reframe(across(X1:X10, ~trimws(paste0(.x, collapse=" "))))
+names(tournament_info_rd2) <- tournament_info_rd2 %>% slice(1) %>% unlist()
+tournament_info_rd3 <- tournament_info_rd2[,-1] %>% slice(-1)
+head(tournament_info_rd3,10)
+```
+
+#### Loading the Data Again
+
+At some point I had realized that this project was supposed to be based on string parsing and regex, so I started working on the alternative approach of loading the data in as a string and getting it into a dataframe before we began processing the columns themselves.
+
+To begin with we read the text file that has been uploaded onto Github within R as a variable. As we can see with the first few lines, the string itself has a lot of characters that need to be removed to get in a better shape.
+
+```{r loading2}
+tournament_info_string <- read_file("https://raw.githubusercontent.com/alu-potato/DATA607/main/Assignments/Week%204%20Project/tournamentinfo.txt")
+substr(tournament_info_string,1,800)
+```
+#### Processing The String into a Tibble
+
+To begin our processing journey we remove newline and carriage return. Then we turn the string into an array of each row of data based on the dash block used to separate each observation. Next we remove the first and last entry of the array which were not useful as they ended with dash blocks but did not have an observation afterwards. Since we need to eventually turn this into a tibble, we obtain the row of column names that will be used for the data frame by parsing the first entry of the character vector at the "|" character. Finally we remove that first entry, and we have a character vector ready to be turned into a tibble. Pretty good shape compared to the mess of the string we had before.
+
+```{r processing1}
+tournament_info_string2 <- str_replace_all(tournament_info_string, regex(r"(\r|\n)"), "")
+tournament_info_array1 <- str_split_1(tournament_info_string2,regex(r"(-+-)"))
+tournament_info_array2 <- head(tournament_info_array1,-1)[-1]
+tournament_info_names <- str_trim(str_split_1(tournament_info_array2[1],fixed("|")))
+tournament_info_array3 <- tournament_info_array2[-1]
+tournament_info_array3[1:4]
+```
+Next we transform the character vector into a data frame by temporarily turning it into a tibble and then passing that tibble through separate_wider_delim which provides a starting point for only extracting and processing the rows we want. While we're doing this, simplest and first thing that we can do here to process the data within the tibble is to  drop the columns that do not contain any information pertaining to the data that we want. In this case, the last 9 columns hold nothing of interest for us.
+
+```{r processing2}
+suppressMessages(
+tournament_info_dataframe <- tibble(tournament_info_array3) %>%
+  separate_wider_delim(tournament_info_array3, delim = "|", names = tournament_info_names, names_repair = "unique")
+)
+tournament_info_dataframe2 <- tournament_info_dataframe[,1:12]
+glimpse(tournament_info_dataframe2)
+```
+#### Processing The Tibble
+
+Now that we have a Tibble we can work with, we still want to further manipulate the entries of each columns. We'll begin with removing the unnecessary white space caught in glimpse. After this, we extract only the pre-rating of the player with a regex match. Then we get only the player IDs from the round column which is what we want, at the same time we convert the other columns that have numbers to the dbl datatype instead of chr as they previously were. One thing to note, is that in the case of players not having an opponent in a round for whatever reason, they have had their opponent match converted to NA in that case.
+
+Next we give the tibble even more apt title names just so it looks nicer.
+
+```{r processing3, warning=FALSE}
+tournament_info_dataframe3 <- tournament_info_dataframe2 %>%
+  mutate(across(1:12,str_trim)) %>%
+    mutate(`USCF ID / Rtg (Pre->Post)` = str_extract(`USCF ID / Rtg (Pre->Post)`,r"((?<=R:\s{1,2})\d{3,4})")) %>%
+      mutate(across(starts_with('Round')|'Pair'|'Total'|`USCF ID / Rtg (Pre->Post)`, parse_number))
+names(tournament_info_dataframe3) <- c('Player ID','Player’s Name','Total Number of Points', 'Round 1 Opponent','Round 2 Opponent','Round 3 Opponent','Round 4 Opponent','Round 5 Opponent','Round 6 Opponent','Round 7 Opponent','Player’s State', 'Player’s Pre-Rating')
+head(tournament_info_dataframe3,5)
+```
+#### Generating the Average Pre Chess Rating of Opponents
+
+To generate the average pre-chess rating of the opponents, we'll use the opponent columns as helper columns to join the player's pre-rating from the ID contained within it. This was done through a for loop because I could not for the life of me figure out how to do this with dplyr functions. Then we can get the mean of those columns in the new column that becomes the average pre chess rating of opponents.
+
+```{r processing4}
+tournament_info_dataframe4 <- tournament_info_dataframe3
+x = 3
+for(i in tournament_info_dataframe4[4:10]) {
+  x = x + 1
+  y = 0
+  for(j in i) {
+    y = y+1
+    if (!is.na(j)) {
+      tournament_info_dataframe4[y,x] <- tournament_info_dataframe4[j,][['Player’s Pre-Rating']]
+    }
+  }
+}
+tournament_info_dataframe5 <- tournament_info_dataframe4 |>
+  mutate('Average Chess Pre-Rating of Opponents' = round(rowMeans(tournament_info_dataframe4[4:10], na.rm=TRUE))) |>
+    select(c('Player’s Name', 'Player’s State', 'Total Number of Points', 'Player’s Pre-Rating', 'Average Chess Pre-Rating of Opponents'))
+head(tournament_info_dataframe5,10)
+```
+
+#### Generating the CSV File
+
+Now that we have the data in the format that we want, all that's needed is the simple process of outputting a .csv file.
+
+```{r generating1}
+
+write.csv(tournament_info_dataframe5, file = "tournament_info.csv", row.names = FALSE)
+
+```
+
+### Conclusions
+
+With the CSV file in hand we could take further action such as adding this information to a database. Within that database we could be tracking the gamut of competitive chess players, and perhaps looking into if there are some players who get "luckier" than others and consistently get matched with players much lower rated than themselves.
