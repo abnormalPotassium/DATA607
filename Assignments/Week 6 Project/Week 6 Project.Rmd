@@ -1,0 +1,79 @@
+---
+title: "Week 6 Project"
+author: "Taha Ahmad"
+date: '`r Sys.Date()`'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+```{r package loading, message=FALSE}
+library(tidyverse)
+```
+
+
+### Introduction
+
+Tidying data is apparently one of the most common uses of your time as a data scientist. That is why having the methods for tidying data down is important to learn. In this assignment we will be importing untidy data from a .csv file, tidying the data up, and then performing analysis on the data. The data set we will be working on in is a small chart describing arrival delays for two airlines across five destinations. Ultimately we want to compare the arrival delays for the two airlines in our analysis.
+
+
+#### Loading The Data
+
+I have uploaded the data set to my GitHub, so we can load it in directly from there. I add the column descriptors of "Airline" and "Delay Status" as those names were previously empty as well. As the empty row is still present, despite skip_empty_rows being forced on we will also remove this row as part of the loading process. 
+
+```{r loading1}
+url = r"(https://raw.githubusercontent.com/alu-potato/DATA607/main/Assignments/Week%205%20Assignment/Assignment5Data.csv)"
+suppressMessages(
+df <- read_csv(url, skip_empty_rows = TRUE, show_col_types = FALSE)[-3,] # Skip_empty_rows does not work here and I'm not sure why, as we can see the third row is empty and gets converted to NAs as if skip_empty_rows = FALSE
+)
+names(df)[1:2] <- c("Airline", "Delay Status")
+df
+```
+
+
+#### Tidying The Data
+
+Now that we have a tibble ready to be worked with in R, we need to think about what exactly needs to be transformed to make this data tidy. First we'll consider the variables within this data set, in this case the variables are airline, delay status, city, and count. Next we'll consider what's missing to transform these variables into columns, airline simply needs to be repeated for each delay status, delay status is fine, city needs to be changed from columns to rows, and the counts need to be properly carried over to their own individual column. Finally we'll consider how we can achieve these transformations in R, for airline we will need to "fill()" in the missing rows while for city and count we will need to "pivot_longer()".
+
+```{r tidying1}
+df2 <- df |>
+  fill(Airline) |>
+  pivot_longer(cols=3:7,names_to= "City",values_to = "Count")
+glimpse(df2)
+```
+
+#### Analyzing The Data
+
+Now that our data is tidied up, we can analyze it. A simple question we can ask to kick off this analysis is: "Who had more arrival delays in total, Alaska or AM West?" After asking myself that question and reviewing the results,  I revised this initial question to ask: "Who had the higher proportion of flight delays?" The reason for revising the initial question is because when comparing the delayed flights, Alaska had more raw delayed flights. If we wanted to know which airline we should take to attempt to minimize delays, that information would not be enough. As it was possible that AM West had more flights in total which would lead to a lower percentage of delayed flights. In the end, this did seem to be the case.
+
+```{r analysis1}
+df2 |>
+  group_by(Airline, `Delay Status`) |>
+  summarize("Flights" = sum(Count), .groups= "drop_last") |>
+  mutate("Proportion of Flights" = Flights/sum(Flights)) |>
+  knitr::kable()
+
+# df2 |>
+#   group_by(Airline, `Delay Status`, City) |>
+#   summarize("Flights" = sum(Count), .groups= "drop_last") |>
+#   arrange(City) |>
+#   group_by(City, Airline) |>
+#   mutate("Proportion of Flights" = Flights/sum(Flights)) |>
+#   knitr::kable()
+```
+
+We have an answer to which airline we should take in General, but what if we wanted to find out which airline we should take between these two depending on the airport we are at? Displaying this information in table format is unwieldy. Visualizing this with faceted proportional bar graphs should supply us with easy to read results.
+
+```{r analysis2}
+ggplot(df2, aes(x=Airline,y=Count,fill = `Delay Status`)) +
+  geom_bar(stat="identity", position = position_fill(reverse= TRUE)) +
+  facet_wrap(~City) +
+  labs(title = "Flight Delays Per City", y = "Proportion of Flights") +
+  theme(legend.position = c(.85,.25), plot.title = element_text(hjust = 0.5))
+```
+
+
+### Conclusions
+
+With our faceted bar plot, we can now see which airline it might be better to choose per city. Interestingly enough (and I had to manually double check this to make sure my proportions weren't incorrect), in every city the proportion of flights from Alaskan Airlines that are delayed are less than AM West. This is a stark contrast to the overall trend of delays within this city. In my eyes this is a sign that the next steps for this data analysis would actually be to collect more data. As the disparity between cases collected with Alaskan Airlines and cases collected with AM West are producing mixed signals that would likely not be the case with a larger set of observations.
