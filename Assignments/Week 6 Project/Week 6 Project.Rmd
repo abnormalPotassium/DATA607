@@ -10,70 +10,183 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 ```{r package loading, message=FALSE}
 library(tidyverse)
+library(openxlsx)
+library(patchwork)
 ```
 
 
 ### Introduction
 
-Tidying data is apparently one of the most common uses of your time as a data scientist. That is why having the methods for tidying data down is important to learn. In this assignment we will be importing untidy data from a .csv file, tidying the data up, and then performing analysis on the data. The data set we will be working on in is a small chart describing arrival delays for two airlines across five destinations. Ultimately we want to compare the arrival delays for the two airlines in our analysis.
+Tidying data is apparently one of the most common uses of your time as a data scientist. That is why having the methods for tidying data down is important to learn. In this assignment we will be importing untidy data from a .csv file, tidying the data up, and then performing analysis on the data. The data we will be working on are three different untidy datasets provided by our classmates:
+
+1. The New York Gasoline Retail Prices Weekly Average by Region - Susanna Wong
+
+Here the requested analysis is to: "Create a line graph to view the trend or compare the prices of the gasoline for each region. We can view if the prices increases or decreases overall".
+
+2. Healthcare employment and wages - Jian Quan Chen
+
+Here the requested analysis is to: "Look at the trend in each profession and see if employment has been increasing or decreasing and compare this with the change in mean salary."
+
+3. International Mortality Estimates by Year - Shoshana Farber
+
+Here the requested analysis is to: "Compare mortality rates for males and females between countries".
 
 
 #### Loading The Data
 
-I have uploaded the data set to my GitHub, so we can load it in directly from there. I add the column descriptors of "Airline" and "Delay Status" as those names were previously empty as well. As the empty row is still present, despite skip_empty_rows being forced on we will also remove this row as part of the loading process. 
+For the New York gas prices, we're able to load the data in by utilizing readr to read the download url directly from data.ny.gov.
 
-```{r loading1}
-url = r"(https://raw.githubusercontent.com/alu-potato/DATA607/main/Assignments/Week%205%20Assignment/Assignment5Data.csv)"
-suppressMessages(
-df <- read_csv(url, skip_empty_rows = TRUE, show_col_types = FALSE)[-3,] # Skip_empty_rows does not work here and I'm not sure why, as we can see the third row is empty and gets converted to NAs as if skip_empty_rows = FALSE
-)
-names(df)[1:2] <- c("Airline", "Delay Status")
-df
+```{r loading gas}
+url <- r"(https://data.ny.gov/api/views/nqur-w4p7/rows.csv?accessType=DOWNLOAD&sorting=true)"
+df_gas <- read_csv(url, skip_empty_rows = TRUE, show_col_types = FALSE)
+glimpse(df_gas)
 ```
+For the healthcare employment and wages data, the CDC provides a download link for the data in xlsx format. Looking through packages in r, I discovered openxlsx which allows for loading in xlsx files through their download urls as dataframes.
 
+While loading in this data we preemptively start cleaning away metadata that comes in the file. The first 4 rows are skipped as they don't contain any data. Then we take a subset that does not include the last 3 rows as this is also metadata. We also want to add indicators for what the date columns are for to break it down further down the line.
+
+```{r loading healthcare}
+url <- r"(https://ftp.cdc.gov/pub/Health_Statistics/NCHS/Publications/Health_US/hus20-21tables/hcempl.xlsx)"
+df_healthcare <- head(
+    read.xlsx(url,na.strings = c('…'),startRow = 5)
+  , -5)
+colnames(df_healthcare)[2:8] <- paste(colnames(df_healthcare)[2:8],"Employment",sep="_")
+colnames(df_healthcare)[9:15] <- paste(colnames(df_healthcare)[9:15],"Wage",sep="_")
+glimpse(df_healthcare)
+```
+For the international mortality dataset, I downloaded the csv provided by the source's website and uploaded it to GitHub. From GitHub it is loaded in through readr where we skip the first row in order to have direct access to the underlying columns. We skip the first three columns as a row index would be redundant and we will not need country codes for the analysis. We also set the names, in order to be able to pivot longer during data tidying.
+
+```{r loading mortality}
+url <- r"(https://raw.githubusercontent.com/alu-potato/DATA607/main/Assignments/Week%206%20Project/InternationalMortality.csv)"
+names_mortality <- c("Row","FIPS","GENC","Country","Year","Both_Infant Mortality","Male_Infant Mortality","Female_Infant Mortality","Both_Child Mortality","Male_Child Mortality","Female_Child Mortality","Both_Under 5 Mortality","Male_Under 5 Mortality","Female_Under 5 Mortality","Both_Life Expectancy","Male_Life Expectancy","Female_Life Expectancy")
+suppressMessages(
+  df_mortality <- read_csv(url, skip_empty_rows = TRUE, show_col_types = FALSE, skip = 2, col_select = c(-1:-3), col_names = names_mortality)
+)
+glimpse(df_mortality)
+```
 
 #### Tidying The Data
 
-Now that we have a tibble ready to be worked with in R, we need to think about what exactly needs to be transformed to make this data tidy. First we'll consider the variables within this data set, in this case the variables are airline, delay status, city, and count. Next we'll consider what's missing to transform these variables into columns, airline simply needs to be repeated for each delay status, delay status is fine, city needs to be changed from columns to rows, and the counts need to be properly carried over to their own individual column. Finally we'll consider how we can achieve these transformations in R, for airline we will need to "fill()" in the missing rows while for city and count we will need to "pivot_longer()".
+Now that we have a tibble ready to be worked with in R, we need to think about what exactly needs to be transformed to make this data tidy. First we'll consider the variables within each data set.
 
-```{r tidying1}
-df2 <- df |>
-  fill(Airline) |>
-  pivot_longer(cols=3:7,names_to= "City",values_to = "Count")
-glimpse(df2)
+In the case of the gasoline retail prices there are only the variables of date, region, and gas price. Currently date is stored as a string, so we want to change that to the type of date. Region is currently wide and needs to be turned into a long format. Gas price has the same problem as region since these two are tied together.
+
+To achieve these changes:
+1. Utilize dplyr::mutate() in order to change the column type of date to date.
+2. Utilize tidyr::pivot_longer() in order to make region and gas price individual columns.
+
+
+```{r tidying gas}
+df_gas_tidy <- df_gas |>
+  mutate(Date = as.Date(Date,"%m/%d/%Y")) |>
+  pivot_longer(cols=2:18,names_to= "Region",values_to = "Average Cost", names_pattern = r"((.*)\sAverage)")
+glimpse(df_gas_tidy)
+```
+In the case of healthcare employment there are the variables of year, occupation title, employment, and mean hourly wage. Currently year is stored as the column names, so we want to pivot that lengthwise. Occupation title needs to have suffixes such as "\4" removed from it and additionally there are occupation categories mixed into the data which don't provide us much value. Employment and hourly wage are currently tied to year in the wide format that needs to be change lengthwise.
+
+To achieve these changes:
+1. Utilize dplyr::mutate() in order to remove the extra characters from the occupation title column.
+2. Utilize drop_na to extract occupation categories which can be identified by having NAs in the 2020 columns.
+3. Utilize tidyr::pivot_longer() in order to make year, employment, and mean hourly wage individual columns.
+
+
+```{r tidying healthcare}
+df_healthcare_tidy <- df_healthcare |>
+  mutate(Occupation.title = gsub(r"(\\\d)","",Occupation.title)) |>
+  drop_na(`2020_Employment`) |>
+  pivot_longer(cols= -Occupation.title,names_to= c("Year",".value"), names_transform = c(Year = as.integer),names_sep = "_") |>
+  rename("Occupation" = Occupation.title)
+glimpse(df_healthcare_tidy)
+```
+In the case of international mortality there are the variables of country, year, mortality category, gender, and mortality rate. Currently country and year are stored as we would like. Mortality category needs to be pivoted to be a row value along with gender. Mortality rate is tied to these two variables and will need to be turned into a single value per row.
+
+To achieve these changes:
+1. Utilize tidyr::pivot_longer() in order to make mortality category, gender, and rate individual columns.
+
+
+```{r tidying mortality}
+df_mortality_tidy <- df_mortality |>
+  pivot_longer(cols= c(-Country,-Year),names_to= c("Gender","Mortality Category"),values_to = "Mortality Value",names_sep = "_")
+glimpse(df_mortality_tidy)
 ```
 
 #### Analyzing The Data
 
-Now that our data is tidied up, we can analyze it. A simple question we can ask to kick off this analysis is: "Who had more arrival delays in total, Alaska or AM West?" After asking myself that question and reviewing the results,  I revised this initial question to ask: "Who had the higher proportion of flight delays?" The reason for revising the initial question is because when comparing the delayed flights, Alaska had more raw delayed flights. If we wanted to know which airline we should take to attempt to minimize delays, that information would not be enough. As it was possible that AM West had more flights in total which would lead to a lower percentage of delayed flights. In the end, this did seem to be the case.
+Now that our data is tidied up, we can analyze it. 
 
-```{r analysis1}
-df2 |>
-  group_by(Airline, `Delay Status`) |>
-  summarize("Flights" = sum(Count), .groups= "drop_last") |>
-  mutate("Proportion of Flights" = Flights/sum(Flights)) |>
+For the gasoline data we want to: Create a line graph to view the trend or compare the prices of the gasoline for each region. We can view if the prices increases or decreases overall. This is a fairly simple analysis that can be achieved through a faceted ggplot line plot.
+
+If we compare the overall trend below starting from 2018 which is when all regions began collecting data, we can see that the price increase and decrease are tied to each other. Overall since 2018 there has been an increase in the gas prices.
+
+```{r analysis gas1}
+df_gas_tidy |>
+  filter(Date > as.Date("2018-01-01")) |>
+  ggplot(aes(x=Date,y=`Average Cost`)) +
+    geom_line() +
+    facet_wrap(~Region)
+```
+If we tighten our scope on when we want to look at the trend of gas prices and only look at New York State, we can see that overall gas prices have still increased in this year, but they are on a downward trend at the moment in New York State as a whole.
+
+```{r analysis gas2}
+df_gas_tidy |>
+  filter(Region == "New York State" & Date > as.Date("2023-01-01")) |>
+  ggplot(aes(x=Date,y=`Average Cost`)) +
+    geom_line()
+```
+Now say we wanted to find out overall what region gas prices are cheapest at, it would be hard to differentiate simply by looking at the line graphs. By looking at a table of mean gas price since 2018 per region, we can see that Elmira is currently the cheapest region to get gas from.
+
+```{r analysis gas3}
+df_gas_tidy |>
+  filter(Date > as.Date("2018-01-01")) |>
+  group_by(Region) |>
+  summarize("Mean Gas Price" = mean(`Average Cost`)) |>
   knitr::kable()
-
-# df2 |>
-#   group_by(Airline, `Delay Status`, City) |>
-#   summarize("Flights" = sum(Count), .groups= "drop_last") |>
-#   arrange(City) |>
-#   group_by(City, Airline) |>
-#   mutate("Proportion of Flights" = Flights/sum(Flights)) |>
-#   knitr::kable()
 ```
 
-We have an answer to which airline we should take in General, but what if we wanted to find out which airline we should take between these two depending on the airport we are at? Displaying this information in table format is unwieldy. Visualizing this with faceted proportional bar graphs should supply us with easy to read results.
 
-```{r analysis2}
-ggplot(df2, aes(x=Airline,y=Count,fill = `Delay Status`)) +
-  geom_bar(stat="identity", position = position_fill(reverse= TRUE)) +
-  facet_wrap(~City) +
-  labs(title = "Flight Delays Per City", y = "Proportion of Flights") +
-  theme(legend.position = c(.85,.25), plot.title = element_text(hjust = 0.5))
+For the healthcare employment data we want to: Look at the trend in each profession and see if employment has been increasing or decreasing and compare this with the change in mean salary.
+
+We go through this analysis by finding the average of both employment and wage each year. As comparing every single profession individually would not be necessary. If we plot mean employment through the years and mean wage through the years we see a strong upward trend overall for both of these. However, employment actually falls temporarily between 2010 and 2015. Perhaps this was linked to the 2008 financial crisis. It is a promising sign that wages stay increasing throughout regardless.
+
+```{r analysis healthcare1}
+healthcare_employment <- df_healthcare_tidy |>
+  group_by(Year) |>
+  summarize("Mean Employment" = mean(Employment,na.rm = TRUE), "Mean Wage" = mean(Wage,na.rm = TRUE)) |>
+  ggplot() +
+    geom_line(aes(x=Year,y = `Mean Employment`))
+
+healthcare_wage <- df_healthcare_tidy |>
+  group_by(Year) |>
+  summarize("Mean Employment" = mean(Employment,na.rm = TRUE), "Mean Wage" = mean(Wage,na.rm = TRUE)) |>
+  ggplot() +
+    geom_line(aes(x=Year,y = `Mean Wage`))
+
+healthcare_employment + healthcare_wage
 ```
 
+For the mortality estimates we want to: Compare mortality rates for males and females between countries.
+
+We can begin this comparison by taking the data frame and filtering out the data regarding both genders as we do not need it in our comparison. Then if we group by "Year","Gender", and "Mortality Category" we can summarize the mortality rates per country into the given groups. Finally, we plot each type of mortality split on gender over time.
+
+Utilizing these plots we can compare the different mortality rates for males and females between all the countries. All types of mortality have consistently decreased in the past decade, conversely so has life expectancy overall. The changes do not seem to vary between gender. However, we can see these constant differences between genders:
+Child mortality does not have a discernible difference between genders. However, for each other type of mortality, the rate is higher for men by about 8%. Life expectancy continues this trend with female life expectancy being about 5 years longer.
+
+```{r analysis mortality1}
+df_mortality_tidy |>
+  filter(Gender != "Both") |>
+  group_by(Year, Gender, `Mortality Category`) |>
+  summarize("Mean Mortality" = mean(`Mortality Value`, na.rm = TRUE), .groups = "drop_last")|>
+  ggplot() +
+    geom_line(aes(x=Year,y = `Mean Mortality`, color=Gender)) +
+    facet_wrap(~`Mortality Category`)
+```
 
 ### Conclusions
 
-With our faceted bar plot, we can now see which airline it might be better to choose per city. Interestingly enough (and I had to manually double check this to make sure my proportions weren't incorrect), in every city the proportion of flights from Alaskan Airlines that are delayed are less than AM West. This is a stark contrast to the overall trend of delays within this city. In my eyes this is a sign that the next steps for this data analysis would actually be to collect more data. As the disparity between cases collected with Alaskan Airlines and cases collected with AM West are producing mixed signals that would likely not be the case with a larger set of observations.
+Here are our conclusions for each dataset:
+
+1. Gas prices in New York State as a whole have increased over time.
+
+2. For healthcare workers in the United States between 2000 and 2020, overall employment has increased and so have wages.
+
+3. For international mortality rates, both male and female mortality has decreased, but females have a constant lead in not dying compared to men.
