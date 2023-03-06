@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Favorite_Books>
+    <Book>
+        <Name>Roadside Picnic</Name>
+        <Year_Published>1972</Year_Published>
+        <Authors>
+            <Author>Arkady Strugatsky</Author>
+            <Author>Boris Strugatsky</Author>
+        </Authors>
+        <Goodreads_Average_Rating>4.16</Goodreads_Average_Rating>
+        <Goodreads_Voters>58353</Goodreads_Voters>
+    </Book>
+    <Book>
+        <Name>Do Androids Dream of Electric Sheep?</Name>
+        <Year_Published>1968</Year_Published>
+        <Authors>
+            <Author>Philip K. Dick</Author>
+        </Authors>
+        <Goodreads_Average_Rating>4.09</Goodreads_Average_Rating>
+        <Goodreads_Voters>415797</Goodreads_Voters>
+    </Book>
+    <Book>
+        <Name>The Handmaid’s Tale</Name>
+        <Year_Published>1985</Year_Published>
+        <Authors>
+            <Author>Margaret Atwood</Author>
+        </Authors>
+        <Goodreads_Average_Rating>4.13</Goodreads_Average_Rating>
+        <Goodreads_Voters>1869506</Goodreads_Voters>
+    </Book>
+</Favorite_Books>

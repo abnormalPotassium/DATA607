@@ -1,0 +1,32 @@
+{
+    "Favorite Books": [
+      {
+       "Name": "Roadside Picnic",
+       "Year Published": "1972",
+       "Authors": [
+        "Arkady Strugatsky",
+        "Boris Strugatsky"
+       ],
+       "Goodreads Average Rating": "4.16",
+       "Goodreads Voters": "58353"
+      },
+      {
+        "Name": "Do Androids Dream of Electric Sheep?",
+        "Year Published": "1968",
+        "Authors": [
+         "Philip K. Dick"
+        ],
+        "Goodreads Average Rating": "4.09",
+        "Goodreads Voters": "415797"
+       },
+       {
+        "Name": "The Handmaid’s Tale",
+        "Year Published": "1985",
+        "Authors": [
+         "Margaret Atwood"
+        ],
+        "Goodreads Average Rating": "4.13",
+        "Goodreads Voters": "1869506"
+       }
+    ]
+}
