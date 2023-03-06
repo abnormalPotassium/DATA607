@@ -1,0 +1,85 @@
+---
+title: "Week 7 Assignment"
+author: "Taha Ahmad"
+date: '`r Sys.Date()`'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+```{r package loading, message=FALSE}
+library(tidyverse)
+```
+
+
+### Introduction
+
+The goal of this assignment is to begin working on the ability to process data sourced from web sources that is not in a convenient direct download to csv or some sort of tabular data. The data types of focus on this assignment are html files which would be typical from direct scraping, along with XML and JSON files which are more likely to be retrieved from API utilization.
+
+To get directly familiar with these formats, we will create a representation of information regarding three books of a certain genre in the three different formats. After the data has been created, we will utilize various R packages in order to load the information as dataframes.
+
+#### Data Creation
+
+For the data, I went with my favorite science fiction books. Beyond capturing the name and authors of these books, I also added: The year of publication, the average reviewer rating on Goodreads, and the amount of reviewers who have voted on the book on Goodreads. This information was then formatted into XML, JSON, and HTML files by hand. For HTML, I replicated the data twice as usually when scraping HTML data there will be other information that you have to filter out to get the data you want. After creation these files were then uploaded to Github. We will set these URLs as variables to load below.
+
+```{r Data Creation}
+jurl <- r"(https://raw.githubusercontent.com/alu-potato/DATA607/main/Assignments/Week%207%20Assignment/books.json)"
+xurl <- r"(https://raw.githubusercontent.com/alu-potato/DATA607/main/Assignments/Week%207%20Assignment/books.xml)"
+hurl <- r"(https://raw.githubusercontent.com/alu-potato/DATA607/main/Assignments/Week%207%20Assignment/books.html)"
+```
+
+#### Data Loading JSON
+
+Now we have to consider how to load this data into R for each file type. For JSON, we will utilize the package rjson to initially parse the URL. After the initial parsing, jinfo is in the format of a list of lists with one redundant layer, so we need to peel back that layer by accessing the first index. Then, we have a list of 3 separate lists of character vectors. To unite these into a single list we utlize rbind(). Finally, jinfo can be converted into a dataframe through as_tibble(), however it does need to be unnested in order to flatten the character vectors inside the dataframe. If we had attempted to flatten the lists before this point, we would lose the inherent structure of the data.
+
+```{r Data Loading JSON}
+library(rjson)
+library(XML)
+library(methods)
+suppressMessages(
+  library(rvest)
+)
+
+jinfo <- fromJSON(file = jurl) # Our JSON file ends up coming out as a list of lists with one redundant layer, so we need to peel back that layer by accessing the first index and defining it as jinfo
+jinfo <- jinfo[[1]] # We now have a list of 3 lists that all need to be fed into a dataframe, feeding these as is to as_tibble() causes an error.
+(jinfo <- do.call(rbind,jinfo)) # Row binding over jinfo provides us with a 5x3 list of character vectors which can be fed properly into as_tibble() after unnesting .
+(jframe <- unnest(as_tibble(jinfo),cols=colnames(jinfo)))
+
+```
+
+#### Data Loading XML
+
+For XML, we will be utilizing the XML package to parse the frame and then converting it to a dataframe with the methods package. As the XML package does not provide native URL support we will also use httr to retrieve the file. We are able to get a dataframe here in a two step process. However, we should note that the output for loading the data through JSON was more tidy. In this dataframe we received multiple authors as a single value. We also don't get a tibble here, although we could convert it to one.
+
+```{r Data Loading XML}
+library(XML)
+library(httr)
+library(methods)
+
+xinfo <- xmlParse(
+  rawToChar(GET(xurl)$content)
+  )
+(xframe <- as_tibble(xmlToDataFrame(xinfo)))
+```
+
+#### Data Loading HTML
+
+For HTML, we will utilize rvest to load the data into a frame. The process is even simpler than loading XML as a dataframe. We simply read the url as html text, navigate to the table we are looking for (in this case there is only one), and cast it as a dataframe utilizing html_table(). Although the dataframe isn't tidy as we again have multiple authors in one cell, we do have the column types properly formatted in contrast to loading the other formats in.
+
+```{r Data Loading HTML}
+suppressMessages(
+  library(rvest)
+)
+
+hinfo <- read_html(hurl)
+(hframe <- hinfo |>
+  html_element("table") |>
+  html_table())
+```
+
+### Conclusions
+
+Although, all this information was in different formats in the beginning. It was fairly simple to transform each format into a dataframe in R. These dataframes do have their differences, for the JSON format it was more labor intensive as the initial format of the data was not ideal to transform into a dataframe. However, we did end up with tidy data. For XML we ended up with a dataframe, and by default lists within lists for XML seem to just get squished together instead of being putting into separate columns. However, both XML and HTML were much simpler to process. HTML leaves us with the best end results for the least work put in, as all of the columns are correctly typed. In the end, with a bit more work we would be able to get identical results for each format regardless.
+
+This just goes to show, that R can be quite useful in collecting data from APIs or scraping.
