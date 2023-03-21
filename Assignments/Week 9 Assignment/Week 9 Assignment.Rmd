@@ -1,0 +1,75 @@
+---
+title: "Week 9 Assignment"
+author: "Taha Ahmad"
+date: '`r Sys.Date()`'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+```{r package loading, message=FALSE}
+library(tidyverse)
+library(httr2)
+library(jsonlite)
+library(keyring)
+```
+
+
+### Introduction
+
+For this assignment, we'll be testing our capabilities of accessing APIs and pulling json data from them into data frames. Specifically, we'll be looking at data from the New York Times books API.
+
+#### Loading an API Key
+
+First and foremost, we've registered for an API Key that has access to the books API. Since we don't want our API key publicly accessible, we have loaded it into a keyring with following code:
+
+```{r loading API key}
+if (!("NYtimes" %in% as_vector(key_list()[2]))) {
+  key_set("APIKeys","NYtimes")
+}
+```
+
+#### Building and Performing Our API Request
+
+The next step once we have our API key is to use httr2 to send a request to the books API. Let's say we want a dataframe that consists of the latest nonfiction bestsellers list.
+
+```{r connecting API}
+api <- request(r"(https://api.nytimes.com/svc/books/v3)") # We initialize a request object to our main API path
+req <- api %>%
+  req_url_path_append("lists.json") %>% # This is the API path we want to take to get bestsellers lists
+  req_url_query(`list` = "Combined Print and E-Book Nonfiction", `api-key` = key_get("APIKeys","NYtimes")) # We get the specific type of list we want and authenticate within the request query
+resp <- req %>%
+  req_perform()
+resp$status_code
+```
+
+#### Processing Our API Response
+
+With a status code of 200 we should have a succesful API request executed. Now we have an API response where we need to process the json body from raw into something R can read.
+
+```{r process API}
+blist <- resp %>% 
+  resp_body_json(flatten=TRUE)
+summary(blist)
+```
+#### Processing Our List
+
+We now have the response JSON parsed and stored as a list, however looking at the summary we see the information also contains metadata which we do not want in our dataframe. We only want to extract the data contained within results. Unfortunately, the data contained within results is quite messy as well and needs to be properly unnested to give us a good dataframe result. Here we utilize rbinding and unnesting to get the dataframe into a format of some of the more informative data.
+
+```{r process list}
+blist2 <- blist$results
+names(blist2) <- rep("book",15)
+blist2 <- do.call(rbind,blist2)
+bframe <- unnest(as_tibble(blist2),cols=colnames(blist2)) |>
+  unnest_wider(book_details) |>
+  select(title, author, rank, rank_last_week, weeks_on_list, amazon_product_url) |>
+  distinct()
+knitr::kable(head(bframe))
+```
+
+We now have a nice table of top 6 best sellers of last week, and an Amazon purchase link if one of these really struck our fancy. 
+
+### Conclusions
+
+We've learned how to access data through APIs directly utilizing httr2. Although the process of calling an API is easy, json isn't always the cleanest format to change into a usable dataframe. So, it's important to learn how to handle malformed json. If we wanted to extend this assignment, we could track the ranking of books overtime and determine which books stay on the rankings the longest.
