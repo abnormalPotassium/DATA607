@@ -1,0 +1,459 @@
+---
+title: "Week 10 Assignment"
+author: "Taha Ahmad"
+date: '`r Sys.Date()`'
+output: 
+  html_document: 
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r package loading, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(janeaustenr)
+library(tidytext)
+library(gutenbergr)
+library(wordcloud)
+library(reshape2)
+library(lexicon)
+```
+
+### Introduction
+
+With the textbook *Text Mining with R* by by Julia Silge and David Robinson, we explore utilizing sentiment analysis on text. We begin with mimicking code examples present in the text, and then we extend it to utilize a different corpus and sentiment lexicons.
+
+### Example Code
+
+As previously mentioned, the code in this section is sourced from *Text Mining with R* by by Julia Silge and David Robinson. We will be extending it later.
+
+#### Loading Jane Austen
+
+First we load in Jane Austen's books through the janeaustenr package and transform them into a tidy format.
+
+```{r load jane}
+original_books <- austen_books() %>%
+  group_by(book) %>%
+  mutate(linenumber = row_number(),
+         chapter = cumsum(str_detect(text, 
+                                     regex("^chapter [\\divxlc]",
+                                           ignore_case = TRUE)))) %>%
+  ungroup()
+```
+
+#### Transforming Jane Austen
+
+Then we tokenize our tidy dataframe and remove stop words which are not useful for analysis.
+
+```{r tokenize jane}
+tidy_books <- original_books %>%
+  unnest_tokens(word, text)
+```
+
+```{r remove stop words jane}
+tidy_books <- tidy_books %>%
+  anti_join(stop_words, by = join_by(word))
+```
+
+#### Analyzing Jane Austen
+
+Here we begin the sentiment analysis initial example by a simple count of words that are joyous according to the nrc sentiment dataset within the book Emma.
+
+Something interesting to note here is the differences between our code results and the textbook example. "Young" has been removed from the latest version of the nrc dataset and "good" has been removed for being a stop word.
+
+```{r joy jane}
+nrc_joy <- get_sentiments("nrc") %>% 
+  filter(sentiment == "joy")
+
+tidy_books %>%
+  filter(book == "Emma") %>%
+  inner_join(nrc_joy, by = join_by(word)) %>%
+  count(word, sort = TRUE)
+```
+
+Next we analyze the sentiment of the current point where we are at with each book to see how it fluctuates throughout. This is done with the bing sentiment dataset.
+
+```{r sentiment time jane, warning=FALSE}
+jane_austen_sentiment <- tidy_books %>%
+  inner_join(get_sentiments("bing"), by = join_by(word)) %>%
+  count(book, index = linenumber %/% 80, sentiment) %>%
+  pivot_wider(names_from = sentiment, values_from = n, values_fill = 0) %>% 
+  mutate(sentiment = positive - negative)
+ggplot(jane_austen_sentiment, aes(index, sentiment, fill = book)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~book, ncol = 2, scales = "free_x")
+```
+
+\
+Afterwards, we want to focus on the differences between how each sentiment dataset quantifies sentiment for a single book, "Pride and Prejudice".
+
+```{r pp jane, warning=FALSE}
+pride_prejudice <- tidy_books %>% 
+  filter(book == "Pride & Prejudice")
+
+afinn <- pride_prejudice %>% 
+  inner_join(get_sentiments("afinn"), by = join_by(word)) %>% 
+  group_by(index = linenumber %/% 80) %>% 
+  summarise(sentiment = sum(value)) %>% 
+  mutate(method = "AFINN")
+
+bing_and_nrc <- bind_rows(
+  pride_prejudice %>% 
+    inner_join(get_sentiments("bing"), by = join_by(word)) %>%
+    mutate(method = "Bing et al."),
+  pride_prejudice %>% 
+    inner_join(get_sentiments("nrc") %>% 
+                 filter(sentiment %in% c("positive", 
+                                         "negative"))
+    , by = join_by(word)) %>%
+    mutate(method = "NRC")) %>%
+  count(method, index = linenumber %/% 80, sentiment) %>%
+  pivot_wider(names_from = sentiment,
+              values_from = n,
+              values_fill = 0) %>% 
+  mutate(sentiment = positive - negative)
+
+bind_rows(afinn, 
+          bing_and_nrc) %>%
+  ggplot(aes(index, sentiment, fill = method)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~method, ncol = 1, scales = "free_y")
+```
+
+\
+We can utilize a dataframe with combined word and sentiment to analyze what is contributing to each sentiment more or less. This can then be visualized through ggplot.
+
+Another anomaly from removing stop words can be seen here where "well", "good", and "like", which are commonly used for their non-sentiment laden meanings, do not appear in positive sentiment.
+
+```{r jane sentiment visualize count, warning=FALSE}
+bing_word_counts <- tidy_books %>%
+  inner_join(get_sentiments("bing"), by = join_by(word)) %>%
+  count(word, sentiment, sort = TRUE) %>%
+  ungroup()
+
+bing_word_counts %>%
+  group_by(sentiment) %>%
+  slice_max(n, n = 10) %>% 
+  ungroup() %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(n, word, fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~sentiment, scales = "free_y") +
+  labs(x = "Contribution to sentiment",
+       y = NULL)
+```
+
+\
+On the other hand miss which is the highest negative sentiment contributor is likely used not to mean missing a shot, but the formal title. Thus, it can be added to a custom_stop_words dataset for removal.
+
+```{r jane custom stopwords}
+custom_stop_words <- bind_rows(tibble(word = c("miss"),  
+                                      lexicon = c("custom")), 
+                               stop_words)
+```
+
+Pivoting to a new route of text analysis, we can consider building word clouds from the text we have.
+
+Comparing our wordcloud to the example, we have to reduce the max words in order to fit each of the common words on screen. Additionally, the shape of the wordcloud seems to be random each time it is built.
+
+```{r jane wordcloud}
+tidy_books %>%
+  count(word) %>%
+  with(wordcloud(word, n, max.words = 75))
+```
+
+\
+We can extend this wordcloud by visualizing which words are negative and those that are positive.
+
+```{r comparison cloud jane, warning=FALSE}
+tidy_books %>%
+  inner_join(get_sentiments("bing"), by = join_by(word)) %>%
+  count(word, sentiment, sort = TRUE) %>%
+  acast(word ~ sentiment, value.var = "n", fill = 0) %>%
+  comparison.cloud(colors = c("gray20", "gray80"),
+                   max.words = 100)
+```
+
+\
+Finally, we let's take a look at answering the question of which chapter is the most negative for each Jane Austen novel.
+
+Note yet again, due to removing our stop words as part of the beginning step we get different chapters for half of the books and greater ratios!
+
+```{r Jane negative chapters, message=FALSE}
+bingnegative <- get_sentiments("bing") %>% 
+  filter(sentiment == "negative")
+
+wordcounts <- tidy_books %>%
+  group_by(book, chapter) %>%
+  summarize(words = n())
+
+tidy_books %>%
+  semi_join(bingnegative) %>%
+  group_by(book, chapter) %>%
+  summarize(negativewords = n()) %>%
+  left_join(wordcounts, by = c("book", "chapter")) %>%
+  mutate(ratio = negativewords/words) %>%
+  filter(chapter != 0) %>%
+  slice_max(ratio, n = 1) %>% 
+  ungroup()
+```
+
+### Extension Code
+
+Here we utilize different text and a new sentiment lexicon following the same general steps as the example code.
+
+#### Loading A New Corpus
+
+Let's utilize the Project Gutenberg library to get our own corpus to analyze. I'm a particular fan of John Steinbeck's Grapes of Wrath so I attempted to search for it, however Project Gutenberg doesn't seem to have it just yet. Instead, we'll go with Grapes of Wrath by Boyd Cable which is a work of fiction regarding a WWI soldier's encounters.
+
+Boyd Cable also has a decent amount of books which fall into the war category as well, but we'll analyze 3 for better visualization down the line.
+
+```{r Corpus Extraction, message=FALSE}
+boyd_works <- gutenberg_works() %>%
+  filter(grepl("cable, boyd", author, ignore.case=TRUE))%>%
+  select(gutenberg_id) %>%
+  head(3) %>%
+  pull(gutenberg_id) %>%
+  gutenberg_download(meta_fields = "title") %>%
+  select(text, title)
+```
+
+Then after downloading his works, we need to ensure that the chapter each book is captured in the dataframe. Unfortunately, only Grapes of Wrath follows a regex matchable chapter pattern. For the other two books we need to match on the chapter lists individually. Then we process the dataframe so we will have the rows show the line.
+
+#### Transforming a New Corpus
+
+```{r Corpus Processing}
+grapes_book <- boyd_works %>%
+  filter(title == "Grapes of wrath") %>%
+  mutate(linenumber = row_number(),
+         chapter = cumsum(str_detect(text, 
+                                     regex("^chapter [\\divxlc]",
+                                           ignore_case = TRUE))))
+
+btn_chp <- c(
+"THE ADVANCED TRENCHES",
+"SHELLS",
+"THE MINE",
+"ARTILLERY SUPPORT",
+"'NOTHING TO REPORT'",
+"THE PROMISE OF SPRING",
+"THE ADVANCE",
+"A CONVERT TO CONSCRIPTION",
+"'BUSINESS AS USUAL'",
+"A HYMN OF HATE",
+"THE COST",
+"A SMOKER'S COMPANION",
+"THE JOB OF THE AM. COL.",
+"THE SIGNALLER'S DAY"
+)
+
+
+btn_book <- boyd_works %>%
+  filter(title == "Between the Lines") %>%
+  mutate(linenumber = row_number(),
+         chapter = cumsum(grepl(paste(btn_chp, collapse = "|"),text))) %>%
+  mutate(chapter = ifelse(chapter > 14, chapter-14, 0))
+
+actn_chp <- c(
+"IN ENEMY HANDS",
+"A BENEVOLENT NEUTRAL",
+"DRILL",
+"A NIGHT PATROL",
+"AS OTHERS SEE",
+"THE FEAR OF FEAR",
+"ANTI-AIRCRAFT",
+"A FRAGMENT",
+"AN OPEN TOWN",
+"THE SIGNALERS",
+"CONSCRIPT COURAGE",
+"SMASHING THE COUNTER-ATTACK",
+"A GENERAL ACTION",
+"AT LAST"
+)
+
+actn_book <- boyd_works %>%
+  filter(title == "Action Front") %>%
+  mutate(linenumber = row_number(),
+         chapter = cumsum(grepl(paste(actn_chp, collapse = "|"),text))) %>%
+  mutate(chapter = ifelse(chapter > 14, chapter-14, 0))
+```
+
+After preprocessing the data, we can take the combination of each dataframe to tokenize it and remove stop words.
+
+```{r Corpus Processing 2}
+boyd_token <- rbind(grapes_book, btn_book, actn_book) %>%
+  unnest_tokens(word, text) %>%
+  mutate(word = str_extract(word, "[a-z']+")) %>%
+  anti_join(stop_words, by = join_by(word)) %>%
+  select(book = title, chapter, linenumber, word)
+```
+
+#### A New Sentiment Dataset
+
+Scouring the internet for an additional unigram sentiment dataset to work with, we end up utilizing the sentiment dataset used within the syuzhet package. However, since the package does not provide direct access to the dataset from R based on my attempts to utilize it, we use the lexicon package to load it in.
+
+The syuzhet sentiment dataset classifies the positivity of unigrams on a sliding scale from -1 to 1.
+
+```{r syuzhet load}
+syuzhet <- lexicon::key_sentiment_jockers %>%
+  select(word, sentiment = value)
+head(syuzhet)
+```
+
+#### Analyzing Grapes of Wrath
+
+Here we begin the sentiment analysis initial example by a simple count of words that are positive according to being a positive value within the syuzhet dataset.
+
+The characteristics of a war story are fully on display here with "forward", "sir", "advance", and other strategic action terms showing up.
+
+```{r joy grapes}
+boyd_token %>%
+  filter(book == "Grapes of wrath") %>%
+  inner_join(syuzhet %>% filter(sentiment > 0), by = join_by(word)) %>%
+  count(word, sort = TRUE)
+
+get_sentiments("bing")
+```
+
+Next we analyze the sentiment of the current point where we are at with each book to see how it fluctuates throughout. This is done with the syuzhet sentiment dataset again. Perhaps not so surprisingly, as war fiction the sentiment that we see throughout this book is overwhelmingly negative. However, we do see glimpses of hope near the start, middle, and end as a trend. As a purely negative novel does not attract many readers.
+
+```{r sentiment time grapes, warning=FALSE}
+boyd_sentiment <- boyd_token %>%
+  inner_join(syuzhet, by = join_by(word)) %>%
+  group_by(book, index = linenumber %/% 80) %>%
+  summarise(sentiment = sum(sentiment), .groups = 'drop')
+ggplot(boyd_sentiment, aes(index, sentiment, fill = book)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~book, ncol = 2, scales = "free_x")
+```
+
+\
+Afterwards, we want to focus on the differences between how each sentiment dataset quantifies sentiment for a single book, "Grapes of Wrath". With this visualization we can see that the Syuzhet sentiment set is comparible to NRC in the amount of variation of sentiment that is possible. This is because of the break down of each individual value into 8 separate stages of sentiment.
+
+```{r pp grapes, warning=FALSE}
+grapes_wrath <- boyd_token %>% 
+  filter(book == "Grapes of wrath")
+
+syuzhet_join <- grapes_wrath %>%
+  inner_join(syuzhet, by = join_by(word)) %>%
+  group_by(index = linenumber %/% 80) %>%
+  summarise(sentiment = sum(sentiment), .groups = 'drop') %>%
+  mutate(method = "Syuzhet")
+
+afinn <- grapes_wrath %>% 
+  inner_join(get_sentiments("afinn"), by = join_by(word)) %>% 
+  group_by(index = linenumber %/% 80) %>% 
+  summarise(sentiment = sum(value)) %>% 
+  mutate(method = "AFINN")
+
+bing_and_nrc <- bind_rows(
+  grapes_wrath %>% 
+    inner_join(get_sentiments("bing"), by = join_by(word)) %>%
+    mutate(method = "Bing et al."),
+  grapes_wrath %>% 
+    inner_join(get_sentiments("nrc") %>% 
+                 filter(sentiment %in% c("positive", 
+                                         "negative"))
+    , by = join_by(word)) %>%
+    mutate(method = "NRC")) %>%
+  count(method, index = linenumber %/% 80, sentiment) %>%
+  pivot_wider(names_from = sentiment,
+              values_from = n,
+              values_fill = 0) %>% 
+  mutate(sentiment = positive - negative)
+
+bind_rows(afinn, 
+          bing_and_nrc, syuzhet_join) %>%
+  ggplot(aes(index, sentiment, fill = method)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~method, ncol = 1, scales = "free_y")
+```
+
+\
+We can utilize a dataframe with combined word and sentiment to analyze what is contributing to each sentiment more or less. This can then be visualized through ggplot.
+
+Here we can observe a quirk of sentiment analysis utilizing the syuzheit library for this corpus. Mentioning a gun, rifle, or attack might be negative in sentiment for many other stories. However, in a war story weapons would tend to be more neutral statements while attacks could be positive.
+
+```{r grapes sentiment visualize count, warning=FALSE}
+syuzhet_sentiment_counts <- boyd_token %>%
+  inner_join(syuzhet, by = join_by(word)) %>%
+  group_by(word) %>%
+  summarise(sentiment = sum(sentiment), .groups = 'drop') %>%
+  mutate(type = ifelse(sentiment>0, "positive", "negative"))
+
+syuzhet_sentiment_counts %>%
+  group_by(type) %>%
+  slice_max(abs(sentiment), n = 10) %>% 
+  ungroup() %>%
+  mutate(word = reorder(word, abs(sentiment))) %>%
+  ggplot(aes(sentiment, word, fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~type, scales = "free_y") +
+  labs(x = "Contribution to sentiment",
+       y = NULL)
+```
+
+\
+We could remove gun and rifle by setting our custom stop words.
+
+```{r grapes custom stopwords}
+custom_stop_words <- bind_rows(tibble(word = c("fire","gun"),  
+                                      lexicon = c("custom")), 
+                               stop_words)
+```
+
+Pivoting to a new route of text analysis, we can consider building word clouds from the text we have.
+
+As we know trench is the highest contributor to negative sentiment and since it is referred to so often, it might be wise to add it to the stop list as well. However, I have reservations about this as despite being a common setting for war novels, being in trenches is definitely a negative thing.
+
+```{r grapes wordcloud}
+boyd_token %>%
+  count(word) %>%
+  with(wordcloud(word, n, max.words = 75))
+```
+
+\
+We can extend this word cloud by visualizing which words are negative and those that are positive.
+
+```{r comparison cloud grapes, warning=FALSE}
+boyd_token %>%
+  inner_join(syuzhet, by = join_by(word)) %>%
+  group_by(word) %>%
+  summarise(sentiment = sum(sentiment), .groups = 'drop') %>%
+  mutate(type = ifelse(sentiment>0, "positive", "negative")) %>%
+  acast(word ~ type, value.var = "sentiment", fill = 0) %>%
+  comparison.cloud(colors = c("gray20", "gray80"),
+                   max.words = 100)
+```
+
+\
+Finally, we let's take a look at answering the question of which chapter is the most negative for each Boyd Cable novel.
+
+"Between the Lines" has the most negative ratio towards the start of the novel. While "Action Front" and "Grapes of Wrath" both get more negative towards the end.
+
+```{r grapes negative chapters, message=FALSE}
+syuzhet_negative <- syuzhet %>% 
+  filter(sentiment < 0)
+
+wordcounts <- boyd_token %>%
+  group_by(book, chapter) %>%
+  summarize(words = n())
+
+boyd_token %>%
+  semi_join(syuzhet_negative) %>%
+  group_by(book, chapter) %>%
+  summarize(negativewords = n()) %>%
+  left_join(wordcounts, by = c("book", "chapter")) %>%
+  mutate(ratio = negativewords/words) %>%
+  filter(chapter != 0) %>%
+  slice_max(ratio, n = 1) %>% 
+  ungroup()
+```
+
+### Conclusions
+
+Sentiment mining from text is a good way to process data that might otherwise not be perfectly quantifiable. However, this naive version of sentiment mining we have gone through in this assignment has many weak points. For example, any negation words such as "not" are not kept in mind. We also saw with the Boyd Cable novels that the existing sentiment dictionaries we have might not be perfectly suited for charting the general sentiment in a war novel as many war related terms are detected as negative within these dictionaries. The corpus you are analyzing must be considered when choosing a proper sentiment dictionary for sentiment mining.
+
+If I were to extend this assignment further, I would like to attempt utilizing bigram analysis to encapsulate negation words and compare the sentiment to this unigram based analysis.
