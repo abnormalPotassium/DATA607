@@ -1,0 +1,61 @@
+---
+title: "Steam Interactive Recommender"
+author: "Taha Ahmad"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+## Introduction
+
+Recommender systems are a common implementation of data science at scale within online commercial settings. Almost every online retailer and content host utilizes a recommender system. For my discussion, I will be taking a look at Steam's, the online video game software marketplace, interactive game [recommender](https://store.steampowered.com/recommender).
+
+## Scenario Design for Steam's Interactive Recommender
+
+Steam actually has multiple recommendation algorithms that each have their own scenario design applied to them. There is not much need for a separate scenario design considering Steam itself and the users when talking about these. Here we focus on the scenario design of the interactive recommender specifically:
+
+### Who are your target users?
+
+The target user for Steam's general recommender system is simply all users who might possibly looking for new video games to purchase. However, the target users for the interactive recommender is different. This is because users must go seek out the interactive recommender portion of Steam itself and customize the parameters they would like to be recommended on. This narrows the user base to those users who are currently actively looking for a new recommendation. 
+
+The difference between these two audiences would be that it is easier to sell to someone who is actively looking for a purchase, rather than just happens to be recommended something of interest on the regular store page while taking a quick look. Thus it is possible to recommend a wider variety of things that might not typically be bought by someone casually looking.
+
+### What are their key goals?
+
+The key goal of the user who would be looking at the recommender is to find something new to play which is similar to their interests.
+
+### How can you help them accomplish those goals?
+
+Steam's interactive recommender helps users achieve this goal by recommending similar games utilizing the user's recently play game as information.
+
+## Steam's Interactive Recommender System "Reverse Engineered"
+
+Steam is actually fairly open in the broad strokes of how their recommender system works. The [initial announcement](https://store.steampowered.com/news/app/593110/view/1716373422378712840) of this recommender system going public to users provides us with a "How It Works" section. Typically, the recommender systems utilized in other places of the marketplace took advantage of user taggings and ratings that are a big feature and driver of what is initially served to users as suggestions. This places the other recommender system(s) in the content based classification of recommender systems. However, the interactive recommender system does not utilize any of this information. Instead, this recommender looks at similar users who are likely to share the same tastes as you based on the shared games that you play. That means that this new recommender system falls under the collaborative classification fo recommender systems, a pivot from their previous recommendors.
+
+Of course, not all the nitty gritty details are present on a news blog post. With a combination of simply looking at the recommender system, digging through [patents](https://image-ppubs.uspto.gov/dirsearch-public/print/downloadPdf/11194879), and looking through information from more [in-depth attempts of reverse-engineering](https://github.com/woctezuma/steam-labs-recommender) we can understand some of the deeper components of how this works. Unfortunately, the algorithms being used itself are kept a mystery with the patent widely mentioning that the alogrithm used could be one of 20+ different listed algorithms or any combination of these.
+
+Still, the processing algorithm itself isn't everything. We can determine the inputs that go into the algorithm for each user through the system. 50 of the user's most recently played games are fed into the recommender. However, upon inspection it is not just the 50 most recently played games but those which have at least 10 hours of playtime total. This is likely done in order to use playtime to determine if a game is one that a user liked, thus allowing it to be used as representative of the user's tastes. Not only is playtime taken account, but also is the recency of the game last being played. A date is explicitly shown for when the user last played the game. It is likely that playtime and recency are used to bias the user's component vector. As it makes sense to weight a game a user plays a lot and has played recently more than one that the user plays less and not recently. The user also has the freedom to exclude any of these 50 games if they would like to fine tune their recommendations. Perhaps they particularly like a single game of a genre, but hate the genre as a whole. In that case they could do such a thing. 
+
+A vector of the user is likely created with these 50 games in mind. Then from what we know, it is probable that the algorithm takes users who have been playing similar games with close matches to bias and finds those that have the shortest distance between vectors. The games which are not already present in the user who is being recommended are what the output of the recommendation shows. 
+
+This output can even be filtered on by the user and customized. By default popularity is also a factor in what is recommended, if a user does not want popularity to affect their recommendation or only affect it by a recent bit, they can tune the slider themselves. Additionally, perhaps there is a type of game that a user wants to play or doesn't want to play at the moment. They are able to exclude these outputs on a tag basis. Finally, the user is able to change the release date range of when the recommended games came out. If someone only wants newer games, they could filter down to games that came out in 6 months.
+
+## Specific Recommendations
+
+The Steam Interactive Recommender system, is quite honestly one of the most powerful and impressive recommendation systems that I've seen. So my criticisms of it are low, mainly because of the customizability. However, that does not mean they are non-existant.
+
+I believe the power of this customization could be taken to the next level by allowing the user vector to be created by scratch. What I mean by this is, rather than utilizing the current system of explicitly excluding what you do not want used in your vector, there should be an option for the opposite. Someone, who has recently played 3 or 4 similar games that they are unsure of what to classify as to find more, would be able to simply include those 4 games in the current recommender system and find recommendations for what would be similar.
+
+Additionally, this isn't a recommendation however when talking about recommender systems I always believe it is appropriate to consider how they impact those items that are new to a marketplace. Games that users have not played and just came out do not have any pull on the recommender system. Thus, it becomes difficult to attempt to discover and support those new sellers and creators. The Steam Recommender mitigates this with its ability to filter by popularity, but even the least popular games need at least a few similar users playing to be recommended to you.
+
+## Conclusion
+
+Steam's Interactive Recommender system is a good example of a well thought out collaborative recommender, but even then it may be able to take some steps towards improvement.
+
+## References
+
+1)  <https://store.steampowered.com/recommender/>
+2)  <https://store.steampowered.com/news/app/593110/view/1716373422378712840>
+3)  <https://image-ppubs.uspto.gov/dirsearch-public/print/downloadPdf/11194879>
+4)  <https://github.com/woctezuma/steam-labs-recommender>
