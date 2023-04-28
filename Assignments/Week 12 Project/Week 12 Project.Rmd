@@ -1,0 +1,154 @@
+---
+title: "Training a Classifier on Email Documents"
+author: "Taha Ahmad"
+date: "`r Sys.Date()`"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r load-packages, message=FALSE}
+library(tidyverse)
+library(httr2)
+library(R.utils)
+library(tm)
+library(quanteda)
+library(e1071)
+library(caret)
+```
+
+## Introduction
+
+When you are dealing with classification problems that have large sets of publicly available data, the best method to resolve such problems is to train a classifier on them. In this project we will be utilizing a public dataset of spam emails and ham (non-spam) emails from https://spamassassin.apache.org/ to attempt to train a model on detecting the difference between spam and ham emails.
+
+## Loading the Data for Classification
+
+To begin we must load in the different emails in our environment. We will be loading in a collection of [2500 ham emails](https://spamassassin.apache.org/old/publiccorpus/20030228_easy_ham.tar.bz2) and [1396 spam emails](https://spamassassin.apache.org/old/publiccorpus/20050311_spam_2.tar.bz2) from our source. These files need to be unzipped twice to get to the text files containing the messages.
+
+```{r loading, warning=FALSE, message=FALSE}
+# Initialize our URLs we will download from
+ham_url <- r"(https://spamassassin.apache.org/old/publiccorpus/20030228_easy_ham.tar.bz2)"
+spam_url <- r"(https://spamassassin.apache.org/old/publiccorpus/20050311_spam_2.tar.bz2)"
+
+# Initialize the file names we will be working with
+ham_file <- str_extract(ham_url, "(?<=/)[^/]+$")
+spam_file <- str_extract(spam_url, "(?<=/)[^/]+$")
+
+# Download the initial compressed files
+download.file(ham_url, ham_file)
+download.file(spam_url, spam_file)
+
+# Decompress from bz2
+bunzip2(ham_file, overwrite = TRUE)
+bunzip2(spam_file, overwrite = TRUE)
+
+# Modify the file names to match the updated file names
+ham_file <- gsub("[.]bz2$", "", ham_file)
+spam_file <- gsub("[.]bz2$", "", spam_file)
+
+# Decompress from tar
+untar(ham_file, exdir = gsub("[.]tar$", "", ham_file))
+untar(spam_file, exdir = gsub("[.]tar$", "", spam_file))
+
+# Modify the file names to match the updated file names
+ham_file <- gsub("[.]tar$", "", ham_file)
+spam_file <- gsub("[.]tar$", "", spam_file)
+
+# Get the list of all extracted text files
+ham_files <- list.files(ham_file, recursive = TRUE, full.names = TRUE)
+spam_files <- list.files(spam_file, recursive = TRUE, full.names = TRUE)
+
+# Remove the CMD file which is irrelevant data
+ham_files <- ham_files[!str_detect(ham_files,pattern="cmd")]
+spam_files <- spam_files[!str_detect(spam_files,pattern="cmd")]
+
+# Process the text files into a tibble for both Spam and Ham
+ham_list <- lapply(ham_files, read_lines)
+ham_list <- lapply(ham_list, paste, collapse = "")
+spam_list <- lapply(spam_files, read_lines)
+spam_list <- lapply(spam_list, paste, collapse = "")
+ham_df <- tibble(text = unlist(ham_list), class = "ham")
+spam_df <- tibble(text = unlist(spam_list), class = "spam")
+
+# Combine the two tibbles into a dataframe which has type data along with randomizing the frame for optimal model building later on
+set.seed(1337)
+email_df <- rbind(ham_df, spam_df)[sample(nrow(ham_df)+nrow(spam_df)),]
+
+head(email_df)
+```
+
+## Processing a Corpus
+
+Now that we have a dataframe with our text loaded into our environment we can begin creating a corpus which we will use to clean our data and later load it into a DTM. We clean our corpus by converting it all into a single encoding standard, removing whitespace, numbers, punctuation, stop words, standardizing case, and converting words to their root form.
+
+```{r processing corpus, warning=FALSE}
+email_corpus <- Corpus(VectorSource(email_df$text))
+processed_corpus <- email_corpus %>%
+  tm_map(content_transformer(iconv), to = "UTF-8") %>%
+  tm_map(stripWhitespace) %>%
+  tm_map(removeNumbers) %>%
+  tm_map(removePunctuation) %>%
+  tm_map(tolower) %>%
+  tm_map(removeWords, stopwords()) %>% 
+  tm_map(stemDocument)
+
+inspect(processed_corpus[500])
+```
+
+Taking a look at a random message, we know that we might need some extra processing to filter out nonsensical items such as those which had previously held a URL or email, this shouldn't be too hard in DTM form.
+
+## DTM Conversion
+
+In order to best tokenize our data for analysis we can turn it into a document-term matrix which shows the frequency of each term per document.
+
+```{r dtm}
+email_dtm <- DocumentTermMatrix(processed_corpus)
+inspect(email_dtm)
+```
+Observing our DTM we can see that there are 96531 terms in total, but with 100% sparsity those terms might not be very meaningful. If we want to filter out some gibberish terms from our transformations it can help to turn down the sparsity to 95%.This means only terms that are in 5% or greater documents in our corpus will be considered.
+
+```{r dtm sparsity reduction}
+email_dtm <- removeSparseTerms(email_dtm, 0.95)
+inspect(email_dtm)
+```
+
+## Data Splitting
+
+Next we want to split our data into test and training sets. This allows us to determine if our model ends up being a good fit without looking at external email data. To do this we'll use 65% of the data to train the model and 35% of the data to test it.
+
+We calculate the sample size required for such a split and then utilize it to create splits on the dataframe and dtm.
+
+After splitting we need to factorize the dtm by creating factors on if a word is detected or if it is not.
+
+```{r data splitting}
+sample_size <- floor(0.65 * nrow(email_df))
+
+email_df_train <- email_df[1:sample_size,]
+email_df_test <- email_df[(1+sample_size):nrow(email_df),]
+
+email_dtm_train <- email_dtm[1:sample_size,]
+email_dtm_test <- email_dtm[(1+sample_size):nrow(email_df),]
+
+factorize <- function(x) {x <- ifelse(x > 0, "y", "n")}
+email_dtm_train <- apply(email_dtm_train, MARGIN = 2, factorize)
+email_dtm_test <- apply(email_dtm_test, MARGIN = 2, factorize)
+```
+
+## Model Training
+
+Finally, we beginning training the model. We will be utilizing a Naive Bayes model to train our model.
+
+```{r model training}
+email_model <- naiveBayes(email_dtm_train,factor(email_df_train$class))
+test_results <- predict(email_model, email_dtm_test)
+
+confusionMatrix(test_results, factor(email_df_test$class), positive = "spam", dnn = c("Prediction",
+    "Actual"))
+```
+Displaying the results within a confidence matrix we can see that our model correctly predicted if an email was spam or not 91.5% of the time. False classification rates of spam were high.
+
+## Conclusion
+
+We have walked through implementing a naive model classifier on text data which we harvested from the web. We then insert the data into a corpus while cleaning it and splitting it to train the model on. Our end results were a relatively solid model with an accuracy of 91.5%. 
+
+To extend this project we might choose to increase the amount of data that is used for training. More specifically, it would be useful to intake spam emails from other sources outside of a singular one we are using. This would lead to spreading out what the model is training on, and make it more generally applicable.
