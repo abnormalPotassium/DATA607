@@ -1,0 +1,502 @@
+---
+title: "DATA 607 Data Final Project"
+author: "Taha Ahmad"
+date: "`r Sys.Date()`"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r setup libraries, message=FALSE}
+# load in required packages
+library(tidyverse)
+library(tidytext)
+library(textstem)
+library(wordcloud)
+library(RColorBrewer)
+library(ranger)
+library(tm)
+library(httr2)
+library(rvest)
+library(jsonlite)
+library(psych)
+library(glue)
+library(GGally)
+library(ggpubr)
+library(ggfortify)
+```
+
+## Introduction
+
+Video game developers trying to market and sell their games are entering a crowded and difficult market, no matter what platforms they are releasing on or methods they are using to market. For games that are sold on PC, one of the most common storefronts is Valve corporation's Steam. It has the biggest user base out of any other market on the platform. Selling on a large platform has big potential for high sales, yet the increase in size of consumers also leads to an increase in size of competitors. From the perspective of someone marketing their software on Steam, We want to make a data driven analysis to attempt to answer what factors lead to the success of a game on the Steam storefront. In our case, we want to estimate success as having a high user engagement with user engagement being measured as the median playtime in hours of users who consume the software.
+
+This will be an extension of our [previous project](https://rpubs.com/tahmad/DATA606FinalProject) from DATA606 focusing on the same research question. In the previous project we had utilized the [Steam Spy](https://steamspy.com/about) API which collects data directly from the Steam Web API to gather the games which have the highest count of players in the past two weeks. The API was initially queried on 5/4/2023, thus we utilized a dataset with the 100 most played games within 2 weeks at that point in time. From the dataset gathered we attempted to answer our research question with a regression model to determine which factors from the API contributed to playtime the most.
+
+One model was a simple linear regression model with user rating predicting playtime, this model had a very low $R^2$ of 0.0107 and the coefficient of user rating was not statistically significant at a p-value of 0.350, additionally many assumptions were violated. The second model was a multiple regression model with multiple variables predicting playtime, this model had a negative adjusted $R^2$ of -0.0312 and the coefficient of user rating was not statistically significant at a p-value of 0.534, additionally many assumptions were violated. Thus we concluded with our data that the median playtime could not be predicted well.
+
+In order to extend this project, we want to try adding additional predictors from the Steam web pages themselves. These predictors will be the amount of words attributed to different sentiments based on sentiment analysis. Additionally, we will attempt to utilize other models such as a random forest tree model for better prediction. The end goal is to determine if there is a model we can find that provides a guideline for what a new developer might want to do to bolster user engagement and playtime.
+
+## Data Loading
+
+### Initial Dataframe
+
+First we initially load the .json file saved from the project that we will be extending that preserves the state of the API response at the point of time on 5/4/2023. Due to the odd format of the json file, after reading it in we are required to have each list generated from the json converted into a tibble and then bound together row wise.
+
+The information gathered here includes the amount of user reviews a game has, both positive and negative, a general estimation of the amount of users that own a game, the price of the game, and the median playtime within the past two weeks between users who have played the game. There are additionally many columns that won't be useful in our analysis.
+
+```{r df1 load}
+# load data hosted through GitHub
+url <- r"(https://raw.githubusercontent.com/alu-potato/DATA606/main/Final%20Project/top100in2weeks.json)"
+
+#  Process the response JSON into a list of lists
+jlist <- read_json(url)
+
+# Melt the list of lists down into a format of a tidy dataframe
+df1 <- jlist %>%
+  map(as_tibble) %>%
+  reduce(bind_rows)
+
+# Preview the data
+knitr::kable(head(df1))
+```
+
+### Description Dataframe
+
+Next, we scrape the new data which we want to load in from Steam itself. We have used the SelectorGadget tool and FireFox web developer tools to inspect the HTML beforehand from Steam's standardized layout for listing pages in order to be able to programatically get the extended description that we want.
+
+We begin the process by loading the base URL for game listings. This URL will take us directly to the game listing page if we add the app ID to the end of it, something we already have stored within our first dataframe. Afterwards, we create a second dataframe with the first dataframe as a base. We want this dataframe to have the same appid column as the first dataframe in order to loop through it and store the descriptions that we are scraping from the Steam page.
+
+To get information about each game we need to loop through all the application IDs. We add the application IDs to the base URL and then ideally would use rvest::read_html() to read the specific URL. However, hear is where we run into a annoying little snag. There are specific web pages that if we loop through end up leaving us a description of NA. We have already rate limited the scraping to one request every two seconds, so we should not be getting rate limited. Individually inspecting html responses leads to showing us that we are indeed still getting a response back, however that response can not be scraped on the specific element ID that we are looking for "game_area_description". Looking into the html response further shows us that we are falling prey to Steam's built in age check for games that are classified as mature, an example shown below.
+
+![age check](https://raw.githubusercontent.com/alu-potato/DATA607/main/Assignments/Final%20Project/AgeCheck.png)
+
+To get around this age check we need cookies that the browser would typically store to ensure that you were above 18 and wanted to see potentially mature content. Rvest's html reading capabilities unfortunately do not have a way to directly pipe in the cookies to do this. However, since Rvest is built on top of httr we can simply use httr::set_cookies() within httr::GET() to essentially gather the same information.
+
+After gathering the description by web scraping we pipe it into the description column for the appropriate app ID and move on to the next app until we have gone through each app. 
+
+```{r df2 load}
+
+url <- r"(https://store.steampowered.com/app/)"
+
+df2 <- df1 %>%
+  select(appid) %>%
+  add_column(description = NA)
+
+for (id in df2$appid) {
+  
+  url_spec <- glue("{url}{id}/")
+  
+  description <- httr::GET(url_spec,
+  httr::set_cookies(`birthtime` = '283993201',
+    `mature_content` = "1")) %>%
+  read_html() %>%
+  html_element("#game_area_description") %>%
+  html_text2()
+  
+  df2$description[df2$appid == id] <- description
+  
+  Sys.sleep(1)
+  
+}
+
+# Preview the data
+glimpse(df2)
+```
+
+## Data Transformation
+
+### Initial Dataframe
+
+After the data is initially loaded into R we want to ensure that it is tidied and processed to be ready for our analysis.
+
+For the first dataframe we select only those columns which we believe will be necessary for our analysis and rename them to be easier to understand and process. For the owners column, since we do not have exact numbers and only value ranges, we change the column to be categorical factors of the few ranges that we do have. Then we create an estimation for the user rating displayed directly on the Steam marketplace which is the amount of positive reviews over total reviews. For the playtime column, the data is initially stored as minutes which leads to large numbers that can lead to odd behavior in regression. Thus, we convert playtime to hours from minutes. Additionally, for similar reasons and ease of interpretability we change the price from cents to dollars.
+
+Then we preview our dataframe.
+
+```{r df1 process}
+df1 <- df1 %>%
+  # Select the columns which are relevant to our analysis
+  select(appid,name,positive_reviews = positive, negative_reviews = negative, owners, playtime = median_2weeks, price) %>%
+  # Calculate a new column for percent positive ratings
+  mutate(rating = round(positive_reviews/(positive_reviews + negative_reviews) ,3),
+         # Factorize the owner column which was previously stored as a string and reverse the ordering so the lowest owner amount would be the reference
+         owners = fct_rev(as_factor(owners)),
+         # Convert playtime from minutes to hours
+         playtime = round(playtime/60,2),
+         # Convert price to a numeric column and change it from cents to dollars
+         price = as.numeric(price)/100)
+
+# Preview the data
+knitr::kable(head(df1))
+```
+
+### Description Dataframe
+
+#### Initial Processing
+
+For our second dataframe, we've noticed from the glimpse() function that newlines are still kept within our text. We'll want to remove the newlines with a simple pattern match.
+Additionally, from initially viewing the store pages we notice a heading that says "About This Game" is also included with each description block. This will add nothing but noise to our tokenization, so we remove it. 
+Finally, we add a simple character count column that can later be used to determine if description length within a listing could be a predictor for playtime.
+
+```{r df2 process 1}
+df2 <- df2 %>%
+  mutate(description = str_remove(description,"\r\nAbout This Game\n\r") %>%
+      str_replace_all('[\n\r]',' '), char = nchar(description))
+
+glimpse(df2)
+```
+
+#### Tokenization
+
+After a bit of initial data cleaning, we next want to proceed on tokenizing the data so we can perform sentiment analysis on the descriptions that we have extracted. We unnest the descriptions into individual word tokens that are grouped by the application ID. We then remove common stop words as those likely do not provide to us any useful information here.
+Finally, we lemmatize or group together different forms of the same word in order to be able to analyze them together.
+
+```{r df2 process 2}
+df2_token <- df2 %>%
+  unnest_tokens(word, description) %>%
+  anti_join(stop_words, by = join_by(word)) %>%
+  mutate(word = lemmatize_words(word))
+
+df_n <- df2_token  %>%
+  count(word, sort = TRUE)
+
+wordcloud(words = df_n$word, freq = df_n$n, min.freq = 17,
+          max.words=200, random.order=FALSE, rot.per=0.35, 
+          colors=brewer.pal(8, "Dark2"))
+```
+
+#### Sentiment Analysis
+
+With our descriptions tokenized, we proceeded to load in the NRC emotion lexicon. This lexicon provides us with 8 different human emotions that are mapped to specific words along with a general sentiment of positive or negative as a category. We take this lexicon and join it to our tokenized descriptions, we then count values grouped by both the appid and sentiment to get the amount of words that fall into each emotion or sentiment per app. Afterwards, we pivot the dataframe to have each application as a row which will be necessary for our predictive models. Finally, we add character count information from df2.
+
+Here we ran into another roadblock where df3 ends up losing an observation compared to df2. Filtering based on what appids were in df2 but not df2, we isolated it to the game Naraka Bladepoint. The dataframe showed the description was empty, thus an inner join that was being done below not carrying it over. Changing the inner join to a full join helped solve the problem. However, a game not having a description was strange and we wanted to ensure there wasn't an error in the data. Thus we went to the game's listing page directly and discovered that the game's description was in image format with multiple images that had text overlaid on them describing the game like shown below. Unfortunately with our method of data collection we are unable to gather descriptions from listings that are like this.
+
+![Naraka](https://raw.githubusercontent.com/alu-potato/DATA607/main/Assignments/Final%20Project/NarakaGone.png)
+
+```{r df2 process 3}
+nrc <- get_sentiments("nrc")
+
+suppressWarnings(
+  
+df3 <- df2_token  %>%
+  inner_join(nrc, by = join_by(word)) %>%
+  group_by(appid, sentiment) %>%
+  count() %>%
+  ungroup() %>%
+  pivot_wider(
+    names_from = sentiment,
+    values_from = n,
+    values_fill = 0
+  ) %>%
+  full_join(df2 %>% select(appid, char), by = join_by(appid)) %>%
+  replace(is.na(.),0)
+  
+
+)
+
+knitr::kable(head(df3))
+```
+
+### Combined Dataframe
+
+To make working with the data easier later down the line, we join df1 and df3 into df to have a dataframe that we will be working with.
+
+```{r df3 process}
+df <- df1 %>%
+  inner_join(df3, by = join_by(appid)) %>%
+  mutate(price = sqrt(price), .keep = "unused")
+
+glimpse(df)
+```
+
+With our data processed, we provide a way to save the dataframe in order to come back to it later.
+
+```{r df3 save}
+saveRDS(df,"steamdf.rds")
+```
+
+```{r df3 load, eval=FALSE}
+df <- readRDS(df,"steamdf.rds")
+```
+
+
+## Exploratory Data Analysis
+
+As we have previously, analyzed the information within df1 our exploratory data analysis will focus on the new information we have brought in from sentiment analysis.
+
+### Summary Statistics
+
+The summary() function is utilized to quickly analyze the new information that we've brought in. The data as a whole is surprisingly much better distributed at first glance than the data which is in df1. For the most part, each sentiment column is close in median and mode, indicating little skewing. However, we anticipate a floor effect at 0 causing slight rightward skews in each instance. As there are large rightward outliers such as a count of 120 positive words in the max instance. This means that there are large outliers within those categories that we might want to deal with to prevent our regression model from not being generalizable.
+
+
+```{r df summary statistics}
+df %>%
+  select(-appid, -name, -positive_reviews, -negative_reviews, -owners, -price, -rating) %>%
+  summary() %>%
+  knitr::kable()
+```
+
+### Boxplots and Histograms
+
+Looking at a histogram and boxplot for positive word count we can see that despite the mean and median being close from our summary statistics, there is still a rightward skew going on. In this case we have 2 outliers towards the right with more than 75 positively associated words in the description. Since the overall distribution is still fairly normal, we will leave these outliers in.
+
+```{r positive hist}
+par(mfrow=c(1,2))
+
+ggplot(df, aes(x=positive)) + geom_histogram(binwidth = 3, na.rm = TRUE, color = "black") + 
+  ggtitle("Positive Word Count Distribution")
+
+ggplot(df, aes(x=positive)) + geom_boxplot(fill = "grey") + 
+  ggtitle("Positive Word Count Spread") +   
+  theme(axis.text.y=element_blank(), 
+        axis.ticks.y=element_blank())
+```
+
+Looking at the histogram and boxplot for the character count of the description we notice one simply egregious outlier present. With triple the value of our third quartile. This is a prime target for outlier removal.
+
+```{r char count hist}
+par(mfrow=c(1,2))
+
+ggplot(df, aes(x=char)) + geom_histogram(binwidth = 300, na.rm = TRUE, color = "black") + 
+  ggtitle("Description Char Count Distribution")
+
+ggplot(df, aes(x=char)) + geom_boxplot(fill = "grey") + 
+  ggtitle("Description Char Count Spread") +   
+  theme(axis.text.y=element_blank(), 
+        axis.ticks.y=element_blank())
+```
+
+### Outlier Removal
+
+#### Ratings
+
+We have a singular large outlier for rating that was greater than half 
+
+```{r rating outlier removal}
+df <- df %>%
+  filter(!rating < 0.40)
+```
+
+#### No Playtime
+
+Since there's no reason as to why games wouldn't have any median playtime we will remove this believing it is erroneous data.
+
+```{r playtime outlier removal}
+df <- df %>%
+  filter(!playtime == 0)
+```
+
+#### High Playtime
+
+The fact that these games are popular makes it strange to have median playtime equivalent to almost a week within two weeks. Since something isn't make sense with these data points, we will also remove them.
+
+```{r high playtime outlier removal}
+df <- df %>%
+  filter(!playtime > 50)
+```
+
+#### High Description Character Count
+
+As the singular outlier we have within the char column is so extreme, we have no choice but to remove it to avoid it negatively affecting the regression model.
+
+```{r high description outlier removal}
+df <- df %>%
+  filter(!char > 7500)
+```
+
+After removing outliers and suspected erroneous data we are now down from 100 observations to 83 observations which will impact our adjusted $R^2$.
+
+### Scatterplots and Correlation
+
+Going back to visualizing our data, we build a scatter plot for description character count against playtime. The results at a correlation of 0.22 show weak to little positive correlation, however this is much better than any correlation we had in the previous project. We can also notice that the variance of playtime slightly increases as the character count increases.
+
+```{r rating scatter, message = FALSE}
+ggplot(df, aes(x=char,y=playtime)) + 
+  geom_point(na.rm = TRUE) +
+  geom_smooth(formula = y ~ x,method=lm, na.rm = TRUE, se = FALSE) +
+  stat_cor(aes(label = after_stat(r.label))) +
+  ggtitle("Description Character Count Against Playtime")
+```
+
+Finally, we'll take a look at the pair plots for determining if we have colinearity between variables. Perhaps unsurprisingly, the sentiments are very correlated with each other. As we have correlations greater than 0.50 for nearly every pair of sentiments. It's especially noticeable looking at something like the correlation of 0.9 between fear and negative count. The assumption of colinearity being violated should be kept in mind for our new models.
+
+```{r ggpairs, message = FALSE}
+df %>%
+  select(-appid, -name, -positive_reviews, -negative_reviews, -owners, -price, -rating) %>%
+  ggpairs()
+```
+
+## Analysis
+
+The next step to take is building our predictive models and then analyzing them.
+
+### Multiple Regression - New Predictors
+
+We first approach this analysis by making a multiple regression model between our sentiment analysis variables and playtime.
+
+#### Generating the Model
+
+We utilize R's built in linear model generation to get our linear model below:
+
+```{r mlm model 1 generation 1}
+df_mlm <- lm(playtime ~ . -appid -name -positive_reviews -negative_reviews -owners -price -rating , data = df)
+summary(df_mlm)
+```
+
+Right off the bat we have a better regression model based on our higher adjusted r^2 of 0.3066 and overall p-value of 6.717e-05. Still, we have the opportunity to perform backwards stepwise regression on this model to see if we can increase the adjusted r^2 even further. We remove coefficients with high p-values one by one and rerun the regression model each time until we end up with the below:
+
+```{r mlm model 1 generation 2}
+df_mlm <- lm(playtime ~ . -appid -name -positive_reviews -negative_reviews -owners -price -rating -joy -surprise -anticipation -fear, data = df)
+summary(df_mlm)
+```
+
+We've kept positive in with a p-value that's not significant at 0.1099, however removing it would drastically drop the adjusted R^2. Thus, our final regression model using just the new predictors says that the amount of words in the Steam description that can be classified with a sentiment of: anger, disgust, negativity, positivity, sadness, or trust all can possibly affect user retention. This is in addition to the amount of characters of the description itself.
+
+Our most powerful predictors include sad words and angry words in the description. For each sad word in the description our regression model says median playtime will go up by 0.66 hours, while for angry words playtime will go up by 0.44 hours. However, disgust is a powerful predictor in the other direction. For each word with a sentiment of disgust associated with it players will play -0.67 hours less.
+
+Looking at the goodness of fit with the adjusted R-squared value. At 0.3285 we know that the model only accounts for 33% of variation in the data. However, with our overall p-value at 3.433e-06, we are almost certain then the utilizing this regression model is better than randomly guessing.
+
+#### Visualizing Predictions
+
+The predictions of this model seem to be relatively even in where the residuals are scattered near the beginning, but veer off course hard after 7 hours of predicted playtime.
+
+```{r mlm1 visualize}
+df$pred <- predict(df_mlm, df)
+
+ggplot(df, aes(x = pred, y = playtime)) +
+  geom_point() + 
+  geom_abline() +
+  xlab("Predicted Playtime") +
+  ylab("Actual Playtime") +
+  ggtitle("New Multiple Regression Predictions")
+```
+
+#### Assumption Analysis of the Model
+
+Let us take a look at the individual residuals and what they tell us with the model. Here we utilize ggfortify's autoplot capabilities to plot 4 diagnostic residual plots at once.
+
+```{r mlm residual analysis, warning=FALSE}
+autoplot(df_mlm)
+```
+
+Looking at the residuals vs fitted plot we can see that our data is not distributed well. The residuals are concentrated towards the left side and begin to fan out as we move to the right again. These deviations mean that the model is not a great fit for our data as we have violated homoscedasticity.
+
+Generating a qq plot of our residuals shows that our residuals do not seem to be normally distributed, and thus our model is not a great fit for the data. As the upper residual data deviates from normality quite a bit. Thus, we have violated the assumption of residual normality.
+
+We retain an assumption that we have not violated, independent observation as what games the different users will be playing is not going to be dependent on another game.
+
+The final assumption we check for multiple regression is colinearity. Going back to the pairplot we see that between predictor variables there is high correlation, thus we fail this assumption check as well.
+
+### Multiple Regression - Combined Predictors
+
+We next see if we can improve our multiple regression model by adding in the variables gathered from the previous project.
+
+#### Generating the Model
+
+We utilize R's built in linear model generation to get our linear model below:
+
+```{r mlm model 2 generation 1}
+df_mlm2 <- lm(playtime ~ . -appid -name -positive_reviews -negative_reviews , data = df)
+summary(df_mlm2)
+```
+
+To start with we have a regression model that is quite close to our previous one based on just the new predictors with our adjusted r^2 at 0.3233, but our overall p-value is lower at 0.00026. Still, we have the opportunity to perform backwards stepwise regression on this model to see if we can increase the adjusted r^2 even further. We remove coefficients with high p-values one by one and rerun the regression model each time until we end up with the below:
+
+```{r mlm model 2 generation 2}
+df_mlm2 <- lm(playtime ~ . -appid -name -positive_reviews -negative_reviews -joy -rating -surprise -price -anticipation , data = df)
+summary(df_mlm2)
+```
+
+This ends up being the farthest we can go without removing a variable from the original predictors that would simply lead to the same regression model as using only the new predictors. Thus, our final regression model using combined predictors says that the amount of words in the Steam description that can be classified with a sentiment of: anger, disgust, fear, negativity, positivity, sadness, or trust all can possibly affect user retention. This is in addition to the amount of characters of the description itself and the amount of owners that have a game.
+
+Our most powerful predictors again include sad words and angry words in the description. For each sad word in the description our regression model says median playtime will go up by 0.68 hours, while for angry words playtime will go up by 0.50 hours. However, disgust is a powerful predictor in the other direction. For each word with a sentiment of disgust associated with it players will play -0.75 hours less.
+
+Looking at the goodness of fit with the adjusted R-squared value. At 0.3565 we know that the model only accounts for 35% of variation in the data which is an increase from the final state of our previous model. The residual standard error has also gone down to 4.225 hours. However, our overall p-value has gone up to 1.145e-05, which is still significant.
+
+#### Visualizing Predictions
+
+The predictions of this model seem to be more stable than the model that simply utilizes the new predictors.
+
+```{r mlm2 visualize}
+df$pred <- predict(df_mlm2, df)
+
+ggplot(df, aes(x = pred, y = playtime)) +
+  geom_point() + 
+  geom_abline() +
+  xlab("Predicted Playtime") +
+  ylab("Actual Playtime") +
+  ggtitle("Combined Multiple Regression Predictions")
+```
+
+#### Assumption Analysis of the Model
+
+Let us take a look at the individual residuals and what they tell us with the model. Here we utilize ggfortify's autoplot capabilities to plot 4 diagnostic residual plots at once.
+
+```{r mlm residual analysis 2, warning=FALSE}
+autoplot(df_mlm2)
+```
+
+Looking at the residuals vs fitted plot we can see that our data is not distributed well. The residuals are concentrated towards the left side and begin to fan out as we move to the right again. These deviations mean that the model is not a great fit for our data as we have violated homoscedasticity.
+
+Generating a qq plot of our residuals shows that our residuals do not seem to be normally distributed, and thus our model is not a great fit for the data. As the upper residual data deviates from normality quite a bit. Thus, we have violated the assumption of residual normality.
+
+We retain an assumption that we have not violated, independent observation as what games the different users will be playing is not going to be dependent on another game.
+
+The final assumption we check for multiple regression is colinearity. Going back to the pairplot we see that between predictor variables there is high correlation, thus we fail this assumption check as well.
+
+#### Multiple Regression Model Conclusion
+
+From our analysis here, we have come up with a multiple linear regression model that was not appropriate for our data again as it violated all of the assumptions of multiple regression and did not account for much of the variation in the data. Yet, the final model we came up with was much improved with the additional data if we ignore these assumptions. Our adjusted r^2 has increased by over 10 times. This tells us that the information contained within the description of a listing on Steam has more to do with keeping users engaged than our previous data such as the user ratings from reviews.
+
+Video game developers who are looking to list their games on Steam should focus on loading their description with words that sounds angry, sad, and avoid those that sound disgusting in order to maximize user retention according to our flawed model.
+
+### Random Forest
+
+Random forest trees are a type of decision tree learning which allow us to draw a predictive model from our set of observations. We have not covered random forest trees in class, so I decided to attempt to utilize the forest functionality from the package ranger. Utilizing ranger to create a decision tree is fairly simple as it utilizes the same formula arguments as creating a regression model does.
+
+After creating our random forest tree, we can see that we're getting an R squared around 0.11. So, the random forest ends up being worse at accounting for variation than the previous two regression models. Yet is better than the regression models from the first project.
+
+```{r regression tree 1}
+r_tree <- ranger(playtime ~  . -appid -name -positive_reviews -negative_reviews -joy -rating -surprise -price -anticipation, data = df, num.trees = 5000)
+print(r_tree)
+```
+Comparing the MSE as well from the other models we have made during this project, it is higher as well.
+
+```{r regression tree 2}
+glue("MSE for multiple regression with only new predictors {mean(residuals(df_mlm)^2)}",
+     "\n MSE for multiple regression with combined predictors {mean(residuals(df_mlm2)^2)}",
+     )
+```
+
+Visualizing predictions versus actual values we can see that the random forest model is very prone to under predicting playtime. This is likely due to the fact that those games with high actual median playtimes are very rare and thus don't affect the forest model as much.
+
+
+```{r regression tree 3}
+set.seed(1234)
+
+df$pred <- predict(r_tree, df)$predictions
+
+ggplot(df, aes(x = pred, y = playtime)) +
+  geom_point() + 
+  geom_abline() +
+  xlab("Predicted Playtime") +
+  ylab("Actual Playtime") +
+  ggtitle("Random Forest Predictions")
+```
+
+Overall the random forest model is worse than our multiple regression models.
+
+## Conclusion
+
+After going through our regression and random forest analyses, we have come back with models that still do not accurately model median Steam user playtime. Assumptions are still violated with the new predictors and the adjusted R^2 values remain low. However, there is improvement compared to our previous iteration tackling predictive models on median user playtime. There were large increases in R^2 for the multiple regression models created. Additionally, there are now significant coefficients that could in theory be used as pointers for how a new game developer should build their game description on Steam in order to maximize engagement. Video game developers who are looking to list their games on Steam can attempt to skew the wording of the description to sound more angry and sad, but avoid sounding disgusting according to the best regression model we got.
+
+Limitations on this project included the small dataset of only 100 games used, and predictors that did not necessarily span all of the factors that would cause a user to be engaged. To extend this research again, a larger dataset should be used with different sources that could provide perhaps genre or user tagging information.
+
+## References
+
+-   [Yun Yu's Harvard post](https://d3.harvard.edu/platform-digit/submission/steam-the-gaming-platform-before-there-were-platforms/) was used for the introduction assumptions on Steam's popularity.
+-   [Steam Spy](https://steamspy.com/about) was used for its API data.
